@@ -4,7 +4,7 @@
   <name>irayple</name>
   <version>0.0.0</version>
   <description>irayple package with messages and parser</description>
-  <maintainer email="tdemkov@semargl.pro">user</maintainer>
+  <maintainer email="tdemkov@semargl.pro">tdemkov</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
