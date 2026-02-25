@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-# echo-client.py
+# Парсер камеры irayple. Данные: (x;y;v3;v4) или несколько подряд в одном пакете.
 
+import re
 import socket
 import time
 import rclpy
 from rclpy.node import Node
 import irayple.msg
 
-HOST = "192.168.0.8"  # The server's hostname or IP address
-PORT = 3000  # The port used by the server
+HOST = "192.168.0.8"
+PORT = 3000
+LOCAL_IP = "192.168.0.10"
 
 
 class Parser(Node):
@@ -19,41 +21,40 @@ class Parser(Node):
             'irayple',
             10
         )
+        self._last_conn_warn = 0.0
         self.create_timer(0.1, self.timer_callback)
 
-    def timer_callback(self):
-        """
-        Создает новое соединение каждый раз.
-        Берет данные с камеры и публикует в топик.
-        """
+    def _parse_packet(self, data):
+        """Из байт вида b'(x;y;v3;v4)(...)' возвращает список (x, y, information, byte)."""
         try:
-            # Создаем новое соединение каждый раз
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)  # Таймаут подключения
-                s.connect((HOST, PORT))
-                data = s.recv(1024)
+            text = data.decode('utf-8', errors='ignore')
+        except Exception:
+            return []
+        out = []
+        for m in re.finditer(r'\((-?\d+);(-?\d+);(\d+);(\d+)\)', text):
+            out.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)))
+        return out
 
+    def timer_callback(self):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1.0)
+                s.bind((LOCAL_IP, 0))
+                s.connect((HOST, PORT))
+                data = s.recv(4096)
                 if data:
-                    text = data.decode('utf-8').strip('()')
-                    # Данные приходят в формате (x;y;z)
-                    values = tuple(map(int, text.split(';')))
-                    if len(values) >= 4:
-                        x = values[0]
-                        y = values[1]
-                        information = values[2]
-                        byte = str(values[3])  # Преобразуем в строку
-                        # self.get_logger().info(f"Received: {values}")
+                    readings = self._parse_packet(data)
+                    for x, y, information, byte in readings:
                         self.publish_data(x, y, information, byte)
-                    else:
-                        self.get_logger().warn(f'Invalid data format')
         except socket.timeout:
-            # Таймаут
             pass
-        except ConnectionRefusedError:
-            self.get_logger().warn(f'Connection {HOST}:{PORT}')
+        except (ConnectionRefusedError, OSError):
+            t = time.time()
+            if t - self._last_conn_warn >= 5.0:
+                self.get_logger().warn(f'Connection {HOST}:{PORT} refused')
+                self._last_conn_warn = t
         except Exception as e:
-            # self.get_logger().error(f'Error: {e}')
-            pass
+            self.get_logger().error(f'Error: {e}')
 
     def publish_data(self, x, y, information, byte):
         """Публикует данные."""

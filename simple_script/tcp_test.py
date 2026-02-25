@@ -1,21 +1,26 @@
-# echo-client.py
-
 import socket
 import time
-import fractions
 
-HOST = "192.168.0.8"  # The server's hostname or IP address
-PORT = 3000  # The port used by the server
-while(1):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
-        data = s.recv(1024)
+HOST, PORT = "192.168.0.8", 3000
+LOCAL_IP = "192.168.0.10"
 
-    print(f"Received {data}")
+while True:
     try:
-        text = data.decode('utf-8').strip('()')
-        values = tuple(map(int, text.split(';')))
-        print(values)
-    except Exception as e:
-        print(f'error: {e}')
-    time.sleep(0.1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(10.0)
+            s.bind((LOCAL_IP, 0))
+            s.connect((HOST, PORT))
+            print("Connected", HOST, PORT)
+            while True:
+                data = s.recv(4096)
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                # Каждое значение (x;y;v3;v4) — с новой строки
+                for part in text.replace(")(", ")\n(").split("\n"):
+                    if part.strip():
+                        print(part.strip())
+                time.sleep(0.01)
+    except (ConnectionRefusedError, OSError):
+        print("Retry in 2s...")
+        time.sleep(2)
