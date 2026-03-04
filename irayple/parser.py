@@ -25,14 +25,14 @@ class Parser(Node):
         self.create_timer(0.1, self.timer_callback)
 
     def _parse_packet(self, data):
-        """Из байт вида b'(x;y;v3;v4)(...)' возвращает список (x, y, information, byte)."""
+        """возвращает список (x, y, information, byte)."""
         try:
             text = data.decode('utf-8', errors='ignore')
         except Exception:
             return []
         out = []
-        for m in re.finditer(r'\((-?\d+);(-?\d+);(\d+);(\d+)\)', text):
-            out.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)))
+        for m in re.findall(r'\((-?\d+);(-?\d+);(\d+);(\d+)\)', text):
+            out.append((int(m[0]), int(m[1]), int(m[2]), m[3]))
         return out
 
     def timer_callback(self):

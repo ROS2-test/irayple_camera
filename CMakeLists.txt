@@ -31,11 +31,16 @@ install(DIRECTORY ${PROJECT_NAME}
     PATTERN "*.pyc" EXCLUDE
 )
 
-# Устанавливаем исполняемый файл
+# Устанавливаем исполняемые файлы
 install(PROGRAMS
     ${PROJECT_NAME}/parser.py
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_parser
+)
+install(PROGRAMS
+    centration/irayple_navigator.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_navigator
 )
 
 if(BUILD_TESTING)

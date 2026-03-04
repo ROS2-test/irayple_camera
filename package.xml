@@ -12,6 +12,10 @@
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf_transformations</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 
