@@ -1,7 +1,7 @@
 import socket
 import time
 
-HOST, PORT = "192.168.0.8", 3000
+HOST, PORT = "192.168.0.14", 3000
 LOCAL_IP = "192.168.0.10"
 
 while True:

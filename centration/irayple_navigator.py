@@ -87,6 +87,7 @@ class IraypleNavigator(Node):
             10
         )
 
+        # таймер для центрации
         self.timer = self.create_timer(1.0 / self.rate, self.timer_callback)
 
     def calculate_center_point(self):
@@ -134,7 +135,7 @@ class IraypleNavigator(Node):
 
     def pi_distance(self, tx, ty):
         """PI для расстояния."""
-        kp, ki = 0.5, 0.05
+        kp, ki = 1.0, 0.1
         error = math.sqrt((tx - self.odom_x)**2 + (ty - self.odom_y)**2)
         dt = 1.0 / self.rate
 

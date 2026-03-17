@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 import irayple.msg
 
-HOST = "192.168.0.8"
+HOST = "192.168.0.14"
 PORT = 3000
 LOCAL_IP = "192.168.0.10"
 
