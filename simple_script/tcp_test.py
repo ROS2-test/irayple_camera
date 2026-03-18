@@ -1,8 +1,8 @@
 import socket
 import time
 
-HOST, PORT = "192.168.0.14", 3000
-LOCAL_IP = "192.168.0.10"
+HOST, PORT = "192.168.49.14", 3000
+LOCAL_IP = "192.168.49.31"
 
 while True:
     try:
@@ -21,6 +21,6 @@ while True:
                     if part.strip():
                         print(part.strip())
                 time.sleep(0.01)
-    except (ConnectionRefusedError, OSError):
-        print("Retry in 2s...")
+    except (ConnectionRefusedError, OSError) as e:
+        print(f"Retry in 2s... ({e})")
         time.sleep(2)

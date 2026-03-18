@@ -42,6 +42,11 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_navigator
 )
+install(PROGRAMS
+    centration/irayple_center.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_center
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

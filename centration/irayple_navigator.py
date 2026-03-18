@@ -87,6 +87,13 @@ class IraypleNavigator(Node):
             10
         )
 
+        # Состояние алгоритма (не блокируем executor в timer_callback)
+        # этапы: rotate1 -> drive2 -> rotate3 -> drive3 -> wait_updates -> done
+        self._stage = 'ready'
+        self._target_angle = 0.0
+        self._target_x = 0.0
+        self._target_y = 0.0
+
         # таймер для центрации
         self.timer = self.create_timer(1.0 / self.rate, self.timer_callback)
 
@@ -190,70 +197,85 @@ class IraypleNavigator(Node):
         # Едем к цели только если она уже рассчитана
         if not self.calculated:
             return
+
         if self.done:
+            # гарантируем остановку
+            cmd = Twist()
+            self.publisher_cmd_vel.publish(cmd)
             return
 
-        while (
-            abs(self.odom_x - self.xt) > 0.002 and
-            abs(self.odom_y - self.yt) > 0.002 and
-            abs(normalize_angle(self.odom_theta - self.irayple_theta)) > math.radians(2)):
-            self.done = False
+        # запускаем
+        if self._stage == 'ready':
+            self._stage = 'rotate1'
 
-            # поворачиваемся на MAX_ANGLE_DEG относительно 0, 90, 180, 270
-            angle = (
-                normalize_angle(self.irayple_theta + math.radians(
-                    self.MAX_ANGLE_DEG))
-                if self.center_to_q else math.radians(self.MAX_ANGLE_DEG))
-            while abs(normalize_angle(self.odom_theta-angle)) > math.radians(1):
-                cmd = Twist()
-                cmd.angular.z = self.pi_angle(angle)
-                self.publisher_cmd_vel.publish(cmd)
-                rclpy.spin_once(self, timeout_sec=0.05)
+        cmd = Twist()
 
-            # едем к точке xt, yt
-            while math.hypot(self.xt - self.odom_x, self.yt - self.odom_y) > 0.002:
-                cmd = Twist()
-                cmd.linear.x = self.pi_distance(self.xt, self.yt)
-                self.publisher_cmd_vel.publish(cmd)
-                rclpy.spin_once(self, timeout_sec=0.05)
+        # угол для первого поворота
+        if self._stage == 'rotate1':
+            # если к ближайшему 0, 90, 180, 270, то center_to_q = True
+            # если к 0, то center_to_q = False
+            self._target_angle = (
+                normalize_angle(self.irayple_theta + math.radians(self.MAX_ANGLE_DEG))
+                if self.center_to_q else math.radians(self.MAX_ANGLE_DEG)
+            )
+            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
+                cmd.angular.z = self.pi_angle(self._target_angle)
+            else:
+                self.reset_pi()
+                self._stage = 'drive1'
 
-            # поворачиваемся на угол 0
-            while abs(normalize_angle(self.odom_theta - self.irayple_theta)) > math.radians(1):
-                cmd = Twist()
-                cmd.angular.z = self.pi_angle(self.irayple_theta)
-                self.publisher_cmd_vel.publish(cmd)
+        # Едем к точке xt, yt
+        if self._stage == 'drive1':
+            self._target_x, self._target_y = self.xt, self.yt
+            if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) > 0.002:
+                cmd.linear.x = self.pi_distance(self._target_x, self._target_y)
+            else:
+                self.reset_pi()
+                self._stage = 'rotate2'
 
-                rclpy.spin_once(self, timeout_sec=0.05)
+        # поворот на irayple_theta
+        if self._stage == 'rotate2':
+            self._target_angle = self.irayple_theta
+            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
+                cmd.angular.z = self.pi_angle(self._target_angle)
+            else:
+                self.reset_pi()
+                self._stage = 'drive2'
 
-            # едем к точке irayple_x, irayple_y
-            while math.hypot(self.irayple_x - self.odom_x, self.irayple_y - self.odom_y) > 0.002:
-                cmd = Twist()
-                cmd.linear.x = self.pi_distance(self.irayple_x, self.irayple_y)
-                self.publisher_cmd_vel.publish(cmd)
-                rclpy.spin_once(self, timeout_sec=0.05)
+        # Едем к точке irayple_x, irayple_y (0, 0)
+        if self._stage == 'drive2':
+            self._target_x, self._target_y = self.irayple_x, self.irayple_y
+            if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) > 0.002:
+                cmd.linear.x = self.pi_distance(self._target_x, self._target_y)
+            else:
+                self.reset_pi()
+                self._stage = 'rotate3'
 
-            # поворачиваемся на угол 0
-            while abs(normalize_angle(self.odom_theta - self.irayple_theta)) > math.radians(1):
-                cmd = Twist()
-                cmd.angular.z = self.pi_angle(self.irayple_theta)
-                self.publisher_cmd_vel.publish(cmd)
-                rclpy.spin_once(self, timeout_sec=0.05)
+        # Финальный доворот к irayple_theta
+        if self._stage == 'rotate3':
+            self._target_angle = self.irayple_theta
+            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
+                cmd.angular.z = self.pi_angle(self._target_angle)
+            else:
+                self.reset_pi()
+                self._stage = 'wait_updates'
+                # ждём свежие сообщения
+                self.odom_received = False
+                self.get_data = False
 
-            # стоп
-            cmd = Twist()
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            self.publisher_cmd_vel.publish(cmd)
-            rclpy.spin_once(self, timeout_sec=0.05)
+        # Ждём, пока придут свежая одометрия и данные с камеры
+        if self._stage == 'wait_updates':
+            cmd = Twist()  # стоп, пока ждём
+            if self.odom_received and self.get_data:
+                # если доехали до 0, 0, то done = True
+                # иначе переходим в ready и делаем заново
+                if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) < 0.002:
+                    self.done = True
+                    self._stage = 'done'
+                else:
+                    self._stage = 'ready'
 
-            self.done = True
-            # ждем пока придет свежая одометрия и камерная одометрия
-            self.odom_received = False
-            self.get_data = False
-            while not self.odom_received or not self.get_data:
-                rclpy.spin_once(self, timeout_sec=0.05)
-            self.odom_received = True
-            self.get_data = True
+        self.publisher_cmd_vel.publish(cmd)
 
 
 def main(args=None):
