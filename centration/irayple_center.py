@@ -242,7 +242,7 @@ class IraypleCenter(Node):
         if self._stage == 'rotate1':
             err = shortest_angle_error_deci(900.0, self.irayple_theta)  # к 90.0град
             if abs(err) > angle_tol_deci:
-                self.angle_pid.setpoint = 900.0
+                self.angle_pid.setpoint = 0.0
                 self.angle_pid.update(self.odom_theta)
                 print(err)
                 w = self.angle_pid.update(err)  # dw/dt
@@ -265,7 +265,7 @@ class IraypleCenter(Node):
                 self._v_sp += dv_sp * dt
                 self._v_sp = max(-self.max_linear_speed, min(self.max_linear_speed, self._v_sp))
                 self.dist_vel_pid.setpoint = self._v_sp
-                cmd.linear.x = self.dist_vel_pid.update(self.odom_vx)
+                cmd.linear.x = -self.dist_vel_pid.update(self.odom_vx)
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы

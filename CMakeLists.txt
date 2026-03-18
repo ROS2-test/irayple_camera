@@ -47,6 +47,12 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_center
 )
+install(PROGRAMS
+    centration/irayple_center_short.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_center_short
+)
+
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
