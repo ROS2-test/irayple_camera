@@ -253,7 +253,7 @@ class IraypleCenter(Node):
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
+                time.sleep(1.0)
                 self._stage = 'drive2'
                 self.get_logger().info('rotate1 выполнен.')
 
@@ -269,7 +269,7 @@ class IraypleCenter(Node):
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
+                time.sleep(1.0)
                 self._stage = 'rotate3'
                 self.get_logger().info('drive2 выполнен.')
 
@@ -288,7 +288,7 @@ class IraypleCenter(Node):
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
+                time.sleep(1.0)
                 self._stage = 'drive4'
                 self.get_logger().info('rotate3 выполнен.')
 
@@ -304,7 +304,7 @@ class IraypleCenter(Node):
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
+                time.sleep(1.0)
                 self._stage = 'rotate5'
                 self.get_logger().info('drive4 выполнен.')
 

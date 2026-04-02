@@ -1,295 +1,468 @@
 #!/usr/bin/env python3
+import math
 import rclpy
 from rclpy.node import Node
-import math
+from rclpy.action import ActionClient
+from rclpy.time import Time
+
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from std_msgs.msg import Bool
+from action_msgs.msg import GoalStatus
+from nav2_msgs.action import NavigateToPose
+from tf2_ros import Buffer, TransformListener, TransformException
 from tf_transformations import euler_from_quaternion
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from std_msgs.msg import String
-
-from irayple.msg import Irayple
 
 
-def normalize_angle(angle):
-    """Приводит угол от -пи до пи."""
-    while angle > math.pi:
-        angle -= 2 * math.pi
-    while angle < -math.pi:
-        angle += 2 * math.pi
-    return angle
+def normalize_angle(a: float) -> float:
+    """Normalize angle to [-pi, pi]."""
+    return math.atan2(math.sin(a), math.cos(a))
 
 
-def normalize_angle90(angle):
-    """Приводит угол к ближайшему из 0, 90, 180, 270."""
-    angle = normalize_angle(angle)
-    qater = round(angle / (0.5 * math.pi))
-    return qater * (0.5 * math.pi)
+def clamp_angle_to_band(value: float, center: float, half_width: float) -> float:
+    """Clamp angle to circular band [center-half_width, center+half_width]."""
+    err = normalize_angle(value - center)
+    if err > half_width:
+        err = half_width
+    elif err < -half_width:
+        err = -half_width
+    return normalize_angle(center + err)
 
 
-def quaternion_to_yaw(q):
-    """кватернион -> угол."""
+def quaternion_to_yaw(q) -> float:
+    """Extract yaw from geometry_msgs/Quaternion."""
     _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-    return yaw
+    return float(yaw)
+
+
+def yaw_to_quaternion(yaw: float):
+    """Create quaternion (x, y, z, w) from yaw."""
+    half = 0.5 * float(yaw)
+    qx = 0.0
+    qy = 0.0
+    qz = math.sin(half)
+    qw = math.cos(half)
+    return qx, qy, qz, qw
+
+
+def goal_status_to_text(status: int) -> str:
+    mapping = {
+        GoalStatus.STATUS_UNKNOWN: 'UNKNOWN',
+        GoalStatus.STATUS_ACCEPTED: 'ACCEPTED',
+        GoalStatus.STATUS_EXECUTING: 'EXECUTING',
+        GoalStatus.STATUS_CANCELING: 'CANCELING',
+        GoalStatus.STATUS_SUCCEEDED: 'SUCCEEDED',
+        GoalStatus.STATUS_CANCELED: 'CANCELED',
+        GoalStatus.STATUS_ABORTED: 'ABORTED',
+    }
+    return mapping.get(int(status), f'UNMAPPED({status})')
 
 
 class IraypleNavigator(Node):
-    """Нода для приезда к 0,0,0."""
-
     def __init__(self):
-        """Инициализация."""
-        super().__init__('irayple_navigator')
-        self.max_ang_speed = 0.3
-        self.max_linear_speed = 0.1
-        self.dist_tolerance = 0.005  # м
-        self.angle_tolerance = math.radians(3)  # град
-        self.rate = 20
-        self.MAX_ANGLE_DEG = 20.0  # макс угол поворота под столом
-        self.irayple_scale = 0.001  # мм -> метры
+        super().__init__('irayple_navigator_graceful_centering')
 
-        self._angle_integral = 0.0
-        self._dist_integral = 0.0
+        # -------- Params ----------
+        self.declare_parameter('target_yaw_deg', 0.0)
+        self.declare_parameter('epselon_yaw_deg', 60.0)
+        self.declare_parameter('epselon_dist_m', 0.50)
+        self.declare_parameter('frame_id', 'map')
+        self.declare_parameter('base_frame_id', 'base_footprint')
 
-        self.x, self.y, self.theta = 0.0, 0.0, 0.0
+        # tolerances
+        self.pos_tol_m = 0.005          # 0.5 cm
+        self.yaw_tol_rad = math.radians(3.0)
 
-        # флаг получения данных с камеры
-        self.get_data = False
-        # флаг цель рассчитана один раз при первом qr
-        self.calculated = False
-        # флаг получены данные odom
-        self.odom_received = False
-        # флаг достижения цели
-        self.done = False
-        # True- центровка к 0, 90, 180, 270
-        self.center_to_q = True
+        # lateral trigger: сколько отклоняться “в сторону” (перпендикуляр к роботу)
+        # (ставь чуть больше pos_tol, чтобы не ловить дрожание)
+        self.lateral_trigger_m = 0.006
+        # trigger for forward/backward correction along robot longitudinal axis
+        self.longitudinal_trigger_m = 0.006
 
-        self.subscription_irayple = self.create_subscription(
-            Irayple,
-            '/irayple',
-            self.irayple_callback,
+        # retreat distance mapping: retreat ~= gain * |lateral_err| + margin
+        self.declare_parameter('retreat_gain', 1.2)
+        self.declare_parameter('retreat_margin_m', 0.004)
+        self.declare_parameter('retreat_min_m', 0.005)
+        self.declare_parameter('retreat_max_m', 0.10)
+
+        self.retreat_gain = float(self.get_parameter('retreat_gain').value)
+        self.retreat_margin_m = float(self.get_parameter('retreat_margin_m').value)
+        self.retreat_min_m = float(self.get_parameter('retreat_min_m').value)
+        self.retreat_max_m = float(self.get_parameter('retreat_max_m').value)
+
+        self.yaw = math.radians(float(self.get_parameter('target_yaw_deg').value))
+        self.epsilon_yaw_rad = math.radians(float(self.get_parameter('epselon_yaw_deg').value))
+        self.epsilon_dist_m = float(self.get_parameter('epselon_dist_m').value)
+        self.frame_id = str(self.get_parameter('frame_id').value)
+        self.base_frame_id = str(self.get_parameter('base_frame_id').value)
+
+        self.max_cycles = 50
+        self.goal_timeout_sec = 120.0
+        self.qr_timeout_sec = 0.7  # если камера/qr давно молчит — ждём
+
+        # -------- State ----------
+        self._qr_pose = None
+        self._qr_time = None
+
+        self._target_pose = None
+        self._target_x = None
+        self._target_y = None
+        self._have_target = False
+        self._centering_requested = False
+        self._centering_in_progress = False
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
+        # -------- подписки ----------
+        self.create_subscription(
+            PoseWithCovarianceStamped,
+            '/qr_pose',
+            self._on_qr_pose,
             10
         )
 
-        self.subscription_odom = self.create_subscription(
-            Odometry,
-            '/odom',
-            self.odom_callback,
+        # флаг центрации
+        self.create_subscription(
+            Bool,
+            '/centration_flag',
+            self._on_centration_flag,
+            10
+        )
+        self._centration_flag_pub = self.create_publisher(Bool, '/centration_flag', 10)
+
+        # где брать target извне (как ты хотел — “не всегда к 0”)
+        self.create_subscription(
+            PoseStamped,
+            '/motion_target',
+            self._on_target_pose,
             10
         )
 
-        self.publisher_cmd_vel = self.create_publisher(
-            Twist,
-            '/cmd_vel',
-            10
+        # -------- клиент action ----------
+        self.action_name = '/graceful_navigate_to_pose'
+        self._client = ActionClient(self, NavigateToPose, self.action_name)
+
+        # Behavior tree (precise)
+        # Можно оставить пустым, но я зафиксировал, чтобы именно precise-XML работал.
+        self.bt_xml = '/home/ubuntu/ros2_ws/src/navigation/behavior_trees/navigate_to_pose_precise.xml'
+
+    def _on_qr_pose(self, msg: PoseWithCovarianceStamped):
+        self._qr_pose = msg
+        self._qr_time = self.get_clock().now()
+
+    def _on_target_pose(self, msg: PoseStamped):
+        self._target_pose = msg
+        self._target_x = float(msg.pose.position.x)
+        self._target_y = float(msg.pose.position.y)
+        self._have_target = True
+
+    def _on_centration_flag(self, msg: Bool):
+        if msg.data:
+            if not self._centering_requested and not self._centering_in_progress:
+                self.get_logger().info('Received /centration_flag=True, starting centering session.')
+            self._centering_requested = True
+
+    def _publish_centration_flag(self, value: bool):
+        msg = Bool()
+        msg.data = bool(value)
+        self._centration_flag_pub.publish(msg)
+
+    def _yaw_in_allowed_band(self, yaw_value: float) -> bool:
+        yaw_err = abs(normalize_angle(yaw_value - self.yaw))
+        return yaw_err <= self.epsilon_yaw_rad
+
+    def _recover_yaw(self, cur_x: float, cur_y: float, cur_yaw: float):
+        yaw_err_deg = math.degrees(abs(normalize_angle(self.yaw - cur_yaw)))
+        self.get_logger().warn(
+            f'Yaw out of allowed band ({yaw_err_deg:.2f}deg). Recovering to target yaw '
+            f'{math.degrees(self.yaw):.1f}deg at current position.'
         )
-        self.publisher_irayple_is_read = self.create_publisher(
-            String,
-            '/irayple_is_read',
-            10
+        # Recovery uses the same global planner, no direct velocity commands.
+        self._send_graceful_goal_and_wait(cur_x, cur_y, self.yaw)
+
+    def _compute_allowed_approach_goal(self, cur_x: float, cur_y: float, cur_yaw: float):
+        """
+        Compute global intermediate goal that is as close to (target_x,target_y) as possible
+        while keeping heading inside [target_yaw - eps, target_yaw + eps].
+        """
+        travel_yaw = clamp_angle_to_band(cur_yaw, self.yaw, self.epsilon_yaw_rad)
+        vx = math.cos(travel_yaw)
+        vy = math.sin(travel_yaw)
+
+        tx = self._target_x
+        ty = self._target_y
+
+        # Orthogonal projection of target onto line through current pose with heading travel_yaw.
+        s = (tx - cur_x) * vx + (ty - cur_y) * vy
+        gx = cur_x + s * vx
+        gy = cur_y + s * vy
+        return gx, gy, travel_yaw
+
+    def _get_robot_pose_from_tf(self):
+        try:
+            tf_msg = self._tf_buffer.lookup_transform(
+                self.frame_id, self.base_frame_id, Time()
+            )
+        except TransformException as ex:
+            self.get_logger().warn(
+                f'No TF {self.frame_id}->{self.base_frame_id}: {ex}',
+                throttle_duration_sec=2.0
+            )
+            return None
+
+        t = tf_msg.transform.translation
+        r = tf_msg.transform.rotation
+        yaw = quaternion_to_yaw(r)
+        return float(t.x), float(t.y), float(yaw)
+
+    def _within_tolerance(self, cur_x, cur_y, cur_yaw) -> bool:
+        dx = self._target_x - cur_x
+        dy = self._target_y - cur_y
+        pos_err = math.hypot(dx, dy)
+        yaw_err = abs(normalize_angle(self.yaw - cur_yaw))
+        return (pos_err <= self.pos_tol_m) and (yaw_err <= self.yaw_tol_rad)
+
+    def _compute_longitudinal_lateral_errors(self, cur_yaw: float, dx: float, dy: float):
+        # Transform target vector from map frame to robot frame:
+        # x_local -> longitudinal (forward), y_local -> lateral (left).
+        longitudinal = dx * math.cos(cur_yaw) + dy * math.sin(cur_yaw)
+        lateral = dx * (-math.sin(cur_yaw)) + dy * (math.cos(cur_yaw))
+        return longitudinal, lateral
+
+    def _compute_retreat_point(self, cur_x, cur_y, cur_yaw, longitudinal_err: float):
+        # Retreat is along robot backward direction, magnitude from longitudinal error.
+        d = abs(longitudinal_err) * self.retreat_gain + self.retreat_margin_m
+        d = max(self.retreat_min_m, min(self.retreat_max_m, d))
+
+        back_x = cur_x - d * math.cos(cur_yaw)
+        back_y = cur_y - d * math.sin(cur_yaw)
+        back_yaw = cur_yaw  # обычно лучше не пытаться поворачивать на retreat
+        return back_x, back_y, back_yaw, d
+
+    def _compute_forward_point(self, cur_x, cur_y, cur_yaw, dist_m: float):
+        fwd_x = cur_x + dist_m * math.cos(cur_yaw)
+        fwd_y = cur_y + dist_m * math.sin(cur_yaw)
+        return fwd_x, fwd_y, cur_yaw
+
+    def _limit_goal_distance(self, x: float, y: float):
+        pose = self._get_robot_pose_from_tf()
+        if pose is None:
+            return x, y, False, None
+        cur_x, cur_y, _ = pose
+        dx = x - cur_x
+        dy = y - cur_y
+        dist = math.hypot(dx, dy)
+        if dist <= self.epsilon_dist_m or dist < 1e-6:
+            return x, y, False, dist
+        scale = self.epsilon_dist_m / dist
+        limited_x = cur_x + dx * scale
+        limited_y = cur_y + dy * scale
+        return limited_x, limited_y, True, dist
+
+    def _send_graceful_goal_and_wait(self, x: float, y: float, yaw: float):
+        if not self._client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error(f'Action server not available: {self.action_name}')
+            return None, None
+
+        goal_x, goal_y, limited, raw_dist = self._limit_goal_distance(x, y)
+        if limited:
+            self.get_logger().info(
+                f'Goal distance limited to epselon_dist_m={self.epsilon_dist_m:.2f}m: '
+                f'raw_dist={raw_dist:.3f}m, limited_goal=({goal_x:.3f},{goal_y:.3f})'
+            )
+        else:
+            goal_x, goal_y = x, y
+
+        qx, qy, qz, qw = yaw_to_quaternion(yaw)
+
+        goal = NavigateToPose.Goal()
+        goal.pose = PoseStamped()
+        goal.pose.header.frame_id = self.frame_id
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(goal_x)
+        goal.pose.pose.position.y = float(goal_y)
+        goal.pose.pose.position.z = 0.0
+        goal.pose.pose.orientation.x = float(qx)
+        goal.pose.pose.orientation.y = float(qy)
+        goal.pose.pose.orientation.z = float(qz)
+        goal.pose.pose.orientation.w = float(qw)
+
+        # фиксируем BT для precise
+        goal.behavior_tree = self.bt_xml
+
+        self.get_logger().info(
+            f'Sending graceful goal: x={goal_x:.3f}, y={goal_y:.3f}, yaw={math.degrees(yaw):.1f}deg'
         )
 
-        # Состояние алгоритма (не блокируем executor в timer_callback)
-        # этапы: rotate1 -> drive2 -> rotate3 -> drive3 -> wait_updates -> done
-        self._stage = 'ready'
-        self._target_angle = 0.0
+        send_future = self._client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future, timeout_sec=self.goal_timeout_sec)
+        goal_handle = send_future.result()
+        if goal_handle is None:
+            self.get_logger().error('send_goal_async returned None')
+            return None, None
+        if not goal_handle.accepted:
+            self.get_logger().error(
+                f'Goal REJECTED by {self.action_name}: '
+                f'x={goal_x:.3f}, y={goal_y:.3f}, yaw={math.degrees(yaw):.1f}deg'
+            )
+            return GoalStatus.STATUS_UNKNOWN, None
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=self.goal_timeout_sec)
+        result_wrapped = result_future.result()
+        if result_wrapped is None:
+            self.get_logger().error('get_result_async returned None / timeout')
+            return goal_handle.status, None
+
+        status = goal_handle.status
+        result = result_wrapped.result
+        err_code = getattr(result, 'error_code', None)
+        err_msg = getattr(result, 'error_msg', None)
+        self.get_logger().info(
+            f'Goal done: status={goal_status_to_text(status)}({status}), '
+            f'error_code={err_code}, error_msg={err_msg}'
+        )
+        return status, result
+
+    def _wait_for_robot_pose(self, timeout_sec: float = 2.0) -> bool:
+        t_start = self.get_clock().now()
+        while rclpy.ok():
+            if self._get_robot_pose_from_tf() is not None:
+                return True
+            rclpy.spin_once(self, timeout_sec=0.05)
+            dt = (self.get_clock().now() - t_start).nanoseconds * 1e-9
+            if dt > timeout_sec:
+                return False
+        return False
+
+    def _run_centering_session(self):
+        self._centering_in_progress = True
+        self._centering_requested = False
+
+        # ТЗ: центруемся строго к (0, 0) и target_yaw_deg.
         self._target_x = 0.0
         self._target_y = 0.0
+        self._have_target = True
 
-        # таймер для центрации
-        self.timer = self.create_timer(1.0 / self.rate, self.timer_callback)
+        if not self._wait_for_robot_pose(timeout_sec=3.0):
+            self.get_logger().warn(
+                f'Centering aborted: no TF {self.frame_id}->{self.base_frame_id}.'
+            )
+            self._publish_centration_flag(False)
+            self._centering_in_progress = False
+            return
 
-    def calculate_center_point(self):
-        """Вычисление координат центра."""
-        self.dx = self.irayple_x - self.odom_x
-        self.dy = self.irayple_y - self.odom_y
-        self.dtheta = self.irayple_theta - self.odom_theta
+        self.get_logger().info(
+            f'Centering start -> target=(0.000,0.000), target_yaw={math.degrees(self.yaw):.1f}deg, '
+            f'allowed_band=+/-{math.degrees(self.epsilon_yaw_rad):.1f}deg'
+        )
 
-    def calculate_point(self):
-        """
-        Вычисляет точку, до которой робот должен отъехать назад,
-        чтобы из неё доехать до 0, 0, 0.
-        """
-        self.d = (self.dy)/(math.cos(0.5 * math.pi - math.radians(
-            self.MAX_ANGLE_DEG)))
-        self.forward = self.dx + self.dx*math.tan(0.5 * math.pi - math.radians(
-            self.MAX_ANGLE_DEG))
+        pose = self._get_robot_pose_from_tf()
+        if pose is None:
+            self.get_logger().warn('Centering aborted: failed to read robot pose from TF.')
+            self._publish_centration_flag(False)
+            self._centering_in_progress = False
+            return
+        cur_x, cur_y, cur_yaw = pose
 
-        self.xt = self.dx - self.d*math.sin(math.radians(self.MAX_ANGLE_DEG))
-        self.yt = self.dy - self.d*math.cos(math.radians(self.MAX_ANGLE_DEG))
+        # 1) First try: global approach to nearest point to center with yaw within allowed band.
+        approach_x, approach_y, approach_yaw = self._compute_allowed_approach_goal(cur_x, cur_y, cur_yaw)
+        self.get_logger().info(
+            'Initial global approach goal (map frame): '
+            f'x={approach_x:.3f}, y={approach_y:.3f}, yaw={math.degrees(approach_yaw):.1f}deg'
+        )
+        self._send_graceful_goal_and_wait(approach_x, approach_y, approach_yaw)
 
-        return self.xt, self.yt, math.radians(self.MAX_ANGLE_DEG)
+        # Then try final target in map frame.
+        self._send_graceful_goal_and_wait(self._target_x, self._target_y, self.yaw)
 
-    def calculate_point_a(self):
-        """Точка подъезда при 20 относительно 0, 90, 180, 270."""
-        angle = normalize_angle(
-            self.irayple_theta + math.radians(self.MAX_ANGLE_DEG))
-        self.d = (self.dy) / (math.cos(0.5 * math.pi - angle))
-        self.forward = self.dx + self.dx * math.tan(0.5 * math.pi - angle)
-        self.xt = self.dx - self.d * math.sin(angle)
-        self.yt = self.dy - self.d * math.cos(angle)
-        return self.xt, self.yt, angle
+        cycle = 0
+        while rclpy.ok() and (cycle < self.max_cycles):
+            if not self._wait_for_robot_pose(timeout_sec=1.0):
+                self.get_logger().warn(
+                    f'No TF {self.frame_id}->{self.base_frame_id} while centering. Waiting...'
+                )
+                continue
 
-    def pi_angle(self, tangle):
-        """PI для угла."""
-        kp, ki = 1.0, 0.1
-        error = normalize_angle(tangle - self.odom_theta)
-        dt = 1.0 / self.rate
+            pose = self._get_robot_pose_from_tf()
+            if pose is None:
+                continue
+            cur_x, cur_y, cur_yaw = pose
+            cycle += 1
 
-        self._angle_integral += error * dt
-        self._angle_integral = max(-1.0, min(1.0, self._angle_integral))
+            dx = self._target_x - cur_x
+            dy = self._target_y - cur_y
+            pos_err = math.hypot(dx, dy)
+            yaw_err = abs(normalize_angle(self.yaw - cur_yaw))
+            longitudinal_err, lateral_err = self._compute_longitudinal_lateral_errors(
+                cur_yaw, dx, dy
+            )
 
-        out = kp * error + ki * self._angle_integral
-        return max(-self.max_ang_speed, min(self.max_ang_speed, out))
-
-    def pi_distance(self, tx, ty):
-        """PI для расстояния."""
-        kp, ki = 1.0, 0.1
-        error = math.sqrt((tx - self.odom_x)**2 + (ty - self.odom_y)**2)
-        dt = 1.0 / self.rate
-
-        self._dist_integral += error * dt
-        self._dist_integral = max(-0.5, min(0.5, self._dist_integral))
-
-        out = kp * error + ki * self._dist_integral
-        return max(-self.max_linear_speed, min(self.max_linear_speed, out))
-
-    def reset_pi(self):
-        """Сброс интеграла."""
-        self._angle_integral = 0.0
-        self._dist_integral = 0.0
-
-    def odom_callback(self, msg):
-        """Колбек для чтения odom."""
-        self.odom_received = True
-        self.odom_x = msg.pose.pose.position.x
-        self.odom_y = msg.pose.pose.position.y
-        self.odom_theta = quaternion_to_yaw(msg.pose.pose.orientation)
-
-    def irayple_callback(self, msg):
-        """Колбек чтения irayple."""
-        self.get_data = True
-        self.irayple_x = msg.x * self.irayple_scale
-        self.irayple_y = msg.y * self.irayple_scale
-        self.irayple_theta = math.radians(msg.information)
-        self.irayple_byte = msg.byte
-
-        # Рассчитываем цель один раз при первом виде qr
-        if not self.calculated and self.odom_received:
-            self.calculate_center_point()
-            # выбираем: центр к 0 или 0, 90, 180, 270
-            if self.center_to_q:
-                self.irayple_theta = normalize_angle90(self.odom_theta)
-                self.calculate_point_a()
-            else:
-                self.calculate_point()
-            self.calculated = True
             self.get_logger().info(
-                f'xt={self.xt:.4f}, yt={self.yt:.4f}'
+                f'Cycle {cycle}: robot=({cur_x:.3f},{cur_y:.3f}) yaw={math.degrees(cur_yaw):.1f} '
+                f'pos_err={pos_err*100:.1f}cm yaw_err={math.degrees(yaw_err):.2f}deg '
+                f'long_err={longitudinal_err*100:.1f}cm lat_err={lateral_err*100:.1f}cm'
             )
 
-    def timer_callback(self):
-        """Колбек для таймера."""
-        # поднимаем флаг если данные с камеры полуены
-        if self.get_data:
-            self.publisher_irayple_is_read.publish(String(data='True'))
-        else:
-            self.publisher_irayple_is_read.publish(String(data='False'))
+            if self._within_tolerance(cur_x, cur_y, cur_yaw):
+                self.get_logger().info('Centered: within 0.5cm and 3deg. Done.')
+                self._publish_centration_flag(False)
+                self._centering_in_progress = False
+                return
 
-        # Едем к цели только если она уже рассчитана
-        if not self.calculated:
-            return
+            # ТЗ: глобальный угол не должен выходить за допустимый диапазон.
+            if not self._yaw_in_allowed_band(cur_yaw):
+                self._recover_yaw(cur_x, cur_y, cur_yaw)
+                continue
 
-        if self.done:
-            # гарантируем остановку
-            cmd = Twist()
-            self.publisher_cmd_vel.publish(cmd)
-            return
+            # 2) If still not enough: retreat and move forward along longitudinal axis.
+            if abs(longitudinal_err) <= self.longitudinal_trigger_m:
+                self._send_graceful_goal_and_wait(self._target_x, self._target_y, self.yaw)
+                continue
 
-        # запускаем
-        if self._stage == 'ready':
-            self._stage = 'rotate1'
-
-        cmd = Twist()
-
-        # угол для первого поворота
-        if self._stage == 'rotate1':
-            # если к ближайшему 0, 90, 180, 270, то center_to_q = True
-            # если к 0, то center_to_q = False
-            self._target_angle = (
-                normalize_angle(self.irayple_theta + math.radians(self.MAX_ANGLE_DEG))
-                if self.center_to_q else math.radians(self.MAX_ANGLE_DEG)
+            retreat_x, retreat_y, retreat_yaw, d = self._compute_retreat_point(
+                cur_x, cur_y, cur_yaw, longitudinal_err
             )
-            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
-                cmd.angular.z = self.pi_angle(self._target_angle)
-            else:
-                self.reset_pi()
-                self._stage = 'drive1'
+            self.get_logger().info(f'Retreat step: {d:.3f}m -> ({retreat_x:.3f},{retreat_y:.3f})')
+            self._send_graceful_goal_and_wait(retreat_x, retreat_y, retreat_yaw)
 
-        # Едем к точке xt, yt
-        if self._stage == 'drive1':
-            self._target_x, self._target_y = self.xt, self.yt
-            if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) > 0.002:
-                cmd.linear.x = self.pi_distance(self._target_x, self._target_y)
-            else:
-                self.reset_pi()
-                self._stage = 'rotate2'
+            if not self._wait_for_robot_pose(timeout_sec=1.0):
+                continue
+            pose = self._get_robot_pose_from_tf()
+            if pose is None:
+                continue
+            cur_x, cur_y, cur_yaw = pose
+            if not self._yaw_in_allowed_band(cur_yaw):
+                self._recover_yaw(cur_x, cur_y, cur_yaw)
+                continue
 
-        # поворот на irayple_theta
-        if self._stage == 'rotate2':
-            self._target_angle = self.irayple_theta
-            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
-                cmd.angular.z = self.pi_angle(self._target_angle)
-            else:
-                self.reset_pi()
-                self._stage = 'drive2'
+            fwd_x, fwd_y, fwd_yaw = self._compute_forward_point(cur_x, cur_y, cur_yaw, d)
+            self.get_logger().info(f'Forward step: {d:.3f}m -> ({fwd_x:.3f},{fwd_y:.3f})')
+            self._send_graceful_goal_and_wait(fwd_x, fwd_y, fwd_yaw)
 
-        # Едем к точке irayple_x, irayple_y (0, 0)
-        if self._stage == 'drive2':
-            self._target_x, self._target_y = self.irayple_x, self.irayple_y
-            if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) > 0.002:
-                cmd.linear.x = self.pi_distance(self._target_x, self._target_y)
-            else:
-                self.reset_pi()
-                self._stage = 'rotate3'
+            # then retry direct target with fixed final yaw
+            self._send_graceful_goal_and_wait(self._target_x, self._target_y, self.yaw)
 
-        # Финальный доворот к irayple_theta
-        if self._stage == 'rotate3':
-            self._target_angle = self.irayple_theta
-            if abs(normalize_angle(self.odom_theta - self._target_angle)) > math.radians(1):
-                cmd.angular.z = self.pi_angle(self._target_angle)
-            else:
-                self.reset_pi()
-                self._stage = 'wait_updates'
-                # ждём свежие сообщения
-                self.odom_received = False
-                self.get_data = False
+        self.get_logger().warn('Centering finished by max_cycles without full tolerance.')
+        self._publish_centration_flag(False)
+        self._centering_in_progress = False
 
-        # Ждём, пока придут свежая одометрия и данные с камеры
-        if self._stage == 'wait_updates':
-            cmd = Twist()  # стоп, пока ждём
-            if self.odom_received and self.get_data:
-                # если доехали до 0, 0, то done = True
-                # иначе переходим в ready и делаем заново
-                if math.hypot(self._target_x - self.odom_x, self._target_y - self.odom_y) < 0.002:
-                    self.done = True
-                    self._stage = 'done'
-                else:
-                    self._stage = 'ready'
+    def run(self):
+        self.get_logger().info(
+            f'Waiting for /centration_flag=True and TF {self.frame_id}->{self.base_frame_id} ...'
+        )
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._centering_requested and not self._centering_in_progress:
+                self._run_centering_session()
 
-        self.publisher_cmd_vel.publish(cmd)
-
-
-def main(args=None):
-    """Мейн."""
-    rclpy.init(args=args)
+def main():
+    rclpy.init()
     node = IraypleNavigator()
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+        node.run()
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

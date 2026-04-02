@@ -52,7 +52,23 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_center_short
 )
+install(PROGRAMS
+    pose/irayple_qr_pose_pub.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_pose_pub
+)
+install(PROGRAMS
+    pose/irayple_qr_pose_pub.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_qr_pose_pub
+)
 
+install(DIRECTORY launch
+    DESTINATION share/${PROJECT_NAME}
+)
+install(FILES pose/markers_config.txt
+    DESTINATION share/${PROJECT_NAME}/pose
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
