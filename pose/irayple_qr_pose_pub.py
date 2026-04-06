@@ -64,13 +64,19 @@ class IraypleQrPosePub(Node):
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 for line in f:
-                    if line.startswith("#"):
+                    line = line.strip()
+                    if not line or line.startswith("#"):
                         continue
-                    else:
-                        self.get_logger().info(line)
-                        p1, p2, p3, p4 = line.strip().split()
-                        print(p1, p2, p3, p4)
-                        markers[str(p1).strip()] = (float(p2), float(p3), float(p4))
+                    parts = line.split()
+                    if len(parts) < 4:
+                        self.get_logger().warn(f"Skip invalid marker config line: '{line}'")
+                        continue
+                    marker_id = parts[0].strip()
+                    x = float(parts[1])
+                    y = float(parts[2])
+                    yaw_rad = float(parts[3])
+                    flip_180 = int(parts[4]) if len(parts) >= 5 else 0
+                    markers[marker_id] = (x, y, yaw_rad, flip_180)
         except Exception as e:
             self.get_logger().error(f"Failed to read config: {e}")
             return {}
@@ -83,8 +89,12 @@ class IraypleQrPosePub(Node):
             self.get_logger().warn(f"byte '{byte_key}' not in markers config.")
             return
         # raw camera pose (x, y)
-        x_m = - msg.y * self.irayple_scale + self._markers[byte_key][0]
-        y_m = msg.x * self.irayple_scale + self._markers[byte_key][1]
+        if self._markers[byte_key][3] == 1:
+            x_m = - msg.y * self.irayple_scale + self._markers[byte_key][0]
+            y_m = msg.x * self.irayple_scale + self._markers[byte_key][1]
+        else:
+            x_m = msg.y * self.irayple_scale + self._markers[byte_key][0]
+            y_m = - msg.x * self.irayple_scale + self._markers[byte_key][1]
 
         # information: 1-3599
         marker_yaw = self._markers[byte_key][2] * 180.0 / math.pi
