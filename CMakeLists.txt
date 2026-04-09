@@ -22,9 +22,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 ament_export_dependencies(rosidl_default_runtime)
 
-# Устанавливаем Python пакет вручную
+
+ament_get_python_install_dir(PYTHON_INSTALL_DIR)
 install(DIRECTORY ${PROJECT_NAME}
-    DESTINATION lib/python3.12/site-packages
+    DESTINATION ${PYTHON_INSTALL_DIR}
     FILES_MATCHING
     PATTERN "*.py"
     PATTERN "__pycache__" EXCLUDE
@@ -38,7 +39,7 @@ install(PROGRAMS
     RENAME irayple_parser
 )
 install(PROGRAMS
-    centration/irayple_navigator.py
+    centration/test/irayple_navigator.py
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_navigator
 )
@@ -48,9 +49,14 @@ install(PROGRAMS
     RENAME irayple_center
 )
 install(PROGRAMS
-    centration/irayple_center_short.py
+    centration/test/irayple_center_short.py
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_center_short
+)
+install(PROGRAMS
+    centration/test/irayple_center_simple.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_center_simple
 )
 install(PROGRAMS
     pose/irayple_qr_pose_pub.py
@@ -58,9 +64,9 @@ install(PROGRAMS
     RENAME irayple_pose_pub
 )
 install(PROGRAMS
-    pose/irayple_qr_pose_pub.py
+    centration/irayple_navigator2.py
     DESTINATION lib/${PROJECT_NAME}
-    RENAME irayple_qr_pose_pub
+    RENAME irayple_navigator2
 )
 
 install(DIRECTORY launch

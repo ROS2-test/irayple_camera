@@ -21,7 +21,7 @@ class Parser(Node):
             10
         )
         self._last_conn_warn = 0.0
-        self.create_timer(0.1, self.timer_callback)
+        self.create_timer(0.05, self.timer_callback)
 
     def _parse_packet(self, data):
         """возвращает список (x, y, information, byte)."""

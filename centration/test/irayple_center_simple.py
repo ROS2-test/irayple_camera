@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
+"""Нода для центровки робота по QR-коду."""
 import rclpy
 from rclpy.node import Node
 import time
 import math
+from std_msgs.msg import Bool
 from tf_transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String, Bool
+from std_msgs.msg import String
 
 from irayple.msg import Irayple
 
@@ -33,48 +35,81 @@ def quaternion_to_yaw(q):
     return yaw
 
 
-def shortest_angle_error_deci(target_deci: float, current_deci: float) -> float:
-    return (target_deci - current_deci + 1800.0) % 3600.0 - 1800.0
+def shortest_angle_error_deci(target_deci: float, current_deci: float):
+    """Кратчайшая ошибка угла в 0.1 град."""
+    # Датчик дает угол в формате 1..3599 (0.1 градуса на шаг).
+    # Нормализуем во внутренний круг 0..3599,
+    # чтобы корректно учитывать переброс.
+    t = (target_deci - 1.0) % 3600.0
+    c = (current_deci - 1.0) % 3600.0
+    return (t - c + 1800.0) % 3600.0 - 1800.0
 
 
 class PID:
-    def __init__(self, kp, ki=0, kd=0, setpoint=0, output_limit=1.0):
+    """Класс ПИДа."""
+
+    def __init__(
+        self,
+        kp,
+        ki=0,
+        kd=0,
+        setpoint=0,
+        output_limit=1.0,
+        max_integral_error=None
+    ):
+        """Инициализация ПИДа."""
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.setpoint = setpoint
         self.output_limit = output_limit
+        self.max_integral_error = max_integral_error
 
         self.last_error = 0
         self.integral = 0
         self.last_time = time.time()
 
     def reset(self):
+        """Сброс ПИДа."""
         self.last_error = 0
         self.integral = 0
         self.last_time = time.time()
 
     def update(self, current_value):
+        """Обновление ПИДа."""
         now = time.time()
         dt = now - self.last_time
-        if dt <= 0: return 0  # Защита от деления на 0
+        if dt <= 0:
+            return 0  # Защита от деления на 0
 
         # Ошибка
         error = self.setpoint - current_value
-        
+
         # интеграл и производная ошибки
         self.integral += error * dt
+        if self.max_integral_error is not None:
+            self.integral = max(
+                -self.max_integral_error,
+                min(self.max_integral_error, self.integral)
+            )
         derivative = (error - self.last_error) / dt
-        
+
         # пид-сигнал
-        output = self.kp * error + self.ki * self.integral + self.kd * derivative
-        
+        output = (
+            self.kp * error
+            + self.ki * self.integral
+            + self.kd * derivative
+        )
+
         # Запоминаем для следующего шага
         self.last_error = error
         self.last_time = now
-        
+
         return max(-self.output_limit, min(self.output_limit, output))
 
+# Пример использования:
+# pid = PID(1.0, 0.1, 0.05, setpoint=100)
+# signal = pid.update(current_temp)
 
 
 class IraypleCenter(Node):
@@ -82,22 +117,48 @@ class IraypleCenter(Node):
 
     def __init__(self):
         """Инициализация."""
-        super().__init__('irayple_center')
+        super().__init__('irayple_center_simple')
         self.max_ang_speed = 0.3
-        self.max_linear_speed = 0.025  # м/с (снизили скорость, чтобы не вылетать за QR)
-        self.max_linear_accel = 0.03  # м/с^2
-        self.dist_tolerance = 0.035  # м
+        self.max_linear_speed = 0.01  # м/с
+        self.max_linear_accel = 0.05  # м/с^2
+        self.dist_tolerance = 0.005  # м
         self.angle_tolerance = 2.0  # град
-        self.rate = 20
+        self.rate = 40
         self.irayple_scale = 0.001  # мм -> метры
-        self.information_scale = 0.1 
+        self.information_scale = 0.1
 
-        # контур положения 
-        self.angle_pid = PID(kp=50.0, ki=0.3, setpoint=0, output_limit=self.max_ang_speed)
-        self.dist_pid =  PID(kp=5.0, ki=100.0, setpoint=0, output_limit=self.max_ang_speed)
-        # контур скорости 
-        self.angle_vel_pid = PID(kp=0.1, ki=5.0, kd=0.0, setpoint=0, output_limit=self.max_ang_speed)
-        self.dist_vel_pid = PID(kp=0.1, ki=5.0, kd=0.0, setpoint=0, output_limit=self.max_linear_speed)
+        # контур положения
+        self.angle_pid = PID(
+            kp=50.0,
+            ki=0.3,
+            setpoint=0,
+            output_limit=self.max_ang_speed,
+            max_integral_error=10.0
+        )
+        self.dist_pid = PID(
+            kp=5.0,
+            ki=100.0,
+            setpoint=0,
+            output_limit=self.max_ang_speed,
+            max_integral_error=10.0
+        )
+        # контур скорости
+        self.angle_vel_pid = PID(
+            kp=0.1,
+            ki=5.0,
+            kd=0.0,
+            setpoint=0,
+            output_limit=self.max_ang_speed,
+            max_integral_error=10.0
+        )
+        self.dist_vel_pid = PID(
+            kp=0.1,
+            ki=5.0,
+            kd=0.0,
+            setpoint=0,
+            output_limit=self.max_linear_speed,
+            max_integral_error=10.0
+        )
 
         # флаг получения данных с камеры
         self.get_data = False
@@ -114,9 +175,8 @@ class IraypleCenter(Node):
         # интегратор задания v
         self._v_sp = 0.0
         self._last_timer_time = time.time()
-        # флаг достижения цели
-        self.done = False
-        self._centering_enabled = False
+        # флаг для старта центровки извне
+        self._centering_active = False
 
         self.subscription_irayple = self.create_subscription(
             Irayple,
@@ -143,81 +203,30 @@ class IraypleCenter(Node):
             10
         )
 
-        # флаг центрации
-        self.create_subscription(
-            Bool,
-            '/centration_flag',
-            self._on_centration_flag,
-            10
+        # флаг для старта центровки извне
+        self._centration_flag_pub = self.create_publisher(
+            Bool, '/centration_flag', 10
         )
-        self._centration_flag_pub = self.create_publisher(Bool, '/centration_flag', 10)
+        self.create_subscription(
+            Bool, '/centration_flag', self._on_flag, 10
+        )
 
         # rotate1 -> drive2 -> rotate3 -> drive3 -> wait_updates -> done
         self._stage = 'ready'
 
-        self._target_angle = 0.0
+        # коорды к которым ехать
+        self._end_angle = 1805.0
         self._target_x = 0.0
         self._target_y = 0.0
-        self._target_dist = 0.0
-        self._rotate3_target = None  # угол для финального поворота по ориентации
-        self._rotate1_started_at = 0.0
-        self._rotate1_timeout_s = 2.0
-        self._prev_err_dist = None
-        self._prev_err_dist_cam = None
-        self._cam_dist_increase_threshold = 15.0
 
         self.timer = self.create_timer(1.0 / self.rate, self.timer_callback)
 
-    def _publish_centration_flag(self, value: bool):
-        self._centration_flag_pub.publish(Bool(data=bool(value)))
-
-    def _start_centering_session(self):
-        self.get_logger().info('Start centering session by /centration_flag=True')
-        self._centering_enabled = True
-        self.done = False
-        self.calculated = False
-        self._stage = 'ready'
-        self._rotate1_started_at = 0.0
-        self._prev_err_dist = None
-        self._prev_err_dist_cam = None
-        self.reset_pi()
-
-    def _stop_centering_session(self):
-        self._centering_enabled = False
-        self.done = False
-        self.calculated = False
-        self._stage = 'ready'
-        self._rotate1_started_at = 0.0
-        self._prev_err_dist = None
-        self._prev_err_dist_cam = None
-        self.reset_pi()
-        self.publisher_cmd_vel.publish(Twist())
-
-    def _on_centration_flag(self, msg: Bool):
-        if msg.data:
-            if not self._centering_enabled:
-                self._start_centering_session()
-        else:
-            if self._centering_enabled:
-                self.get_logger().info('Stop centering session by /centration_flag=False')
-            self._stop_centering_session()
+        self.declare_parameter('global_frame', 'map')
 
     def calculate_angle(self):
         """Угол к центру в глобальной системе координат."""
         angle_in_robot = math.atan2(self.irayple_y, self.irayple_x)
         return normalize_angle(self.odom_theta + angle_in_robot)
-
-    def camera_angle_error(self):
-        """Угол до центра в системе робота (рад): 0 => центр строго по оси X."""
-        return normalize_angle(math.atan2(self.irayple_y, self.irayple_x))
-
-    def camera_angle_error_stable(self):
-        """
-        Стабильная ошибка угла для подъезда:
-        используем abs(x), чтобы убрать скачки на +-pi при смене знака x.
-        Диапазон ошибки: [-pi/2, pi/2].
-        """
-        return math.atan2(self.irayple_y, max(abs(self.irayple_x), 1e-6))
 
     def calculate_dist(self):
         """Расстояние до центра по камере (м)."""
@@ -246,8 +255,6 @@ class IraypleCenter(Node):
         """Колбек чтения irayple."""
         self.get_data = True
         self._last_irayple_time = time.time()
-        self.irayple_raw_x = float(msg.x)
-        self.irayple_raw_y = float(msg.y)
         self.irayple_x = msg.x * self.irayple_scale
         self.irayple_y = msg.y * self.irayple_scale
         # information: 1-3599
@@ -257,7 +264,14 @@ class IraypleCenter(Node):
             self.calculated = True
             d = self.calculate_dist()
             a = self.calculate_angle()
-            self.get_logger().info(f'Центр: dist={d:.4f} м, угол={math.degrees(a):.1f}')
+            self.get_logger().info(
+                f'Центр: dist={d:.4f} м, угол={math.degrees(a):.1f}'
+            )
+
+    def _on_flag(self, msg: Bool):
+        if not msg.data:
+            return
+        self._centering_active = msg.data
 
     def timer_callback(self):
         """Колбек для таймера."""
@@ -269,17 +283,15 @@ class IraypleCenter(Node):
         self._last_timer_time = now
 
         # если камера давно не обновлялись-стоп и ждём
-        self.get_data = (now - self._last_irayple_time) <= self._irayple_timeout_s
+        self.get_data = (
+            (now - self._last_irayple_time) <= self._irayple_timeout_s
+        )
 
         # поднимаем флаг если данные с камеры полуены
         if self.get_data:
             self.publisher_irayple_is_read.publish(String(data='True'))
         else:
             self.publisher_irayple_is_read.publish(String(data='False'))
-            self.publisher_cmd_vel.publish(Twist())
-            return
-
-        if not self._centering_enabled:
             self.publisher_cmd_vel.publish(Twist())
             return
 
@@ -295,96 +307,116 @@ class IraypleCenter(Node):
 
         # запускаем
         if self._stage == 'ready':
+            # self._target_angle = self.calculate_angle()
             self._stage = 'rotate1'
-            self._rotate1_started_at = now
-            self.get_logger().info(
-                f'Поворот к центру (ошибка {math.degrees(abs(self.camera_angle_error())):.0f}°).'
-            )
 
         cmd = Twist()
         angle_tol_deci = self.angle_tolerance * 10.0 / 2  # град -> 0.1 град
-        angle_tol_rad = math.radians(self.angle_tolerance)
         # (почему -то надо делить на 2)
 
         # 1 угол для x (положение -> w -> cmd.angular.z)
         if self._stage == 'rotate1':
-            err_rad = self.camera_angle_error_stable()
-            rotate_elapsed = now - self._rotate1_started_at
-            if abs(err_rad) > angle_tol_rad and rotate_elapsed < self._rotate1_timeout_s:
-                # Простой P-контур без интегратора: меньше риска бесконечного перекрута.
-                k_ang = 1.2
-                # Инвертируем знак: ось камеры может быть обратной оси робота.
-                cmd.angular.z = max(-self.max_ang_speed, min(self.max_ang_speed, -k_ang * err_rad))
+            # к 90.0град
+            err = shortest_angle_error_deci(900.0, self.irayple_theta)
+            if abs(err) > angle_tol_deci:
+                self.angle_pid.setpoint = 0.0
+                self.angle_pid.update(self.odom_theta)
+                print(err)
+                w = self.angle_pid.update(err)  # dw/dt
+                self._omega_sp += w * dt
+                self._omega_sp = max(
+                    -self.max_ang_speed,
+                    min(self.max_ang_speed, self._omega_sp)
+                )
+                self.angle_vel_pid.setpoint = self._omega_sp
+                cmd.angular.z = self.angle_vel_pid.update(self.odom_omega)
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
+                time.sleep(1.0)
                 self._stage = 'drive2'
                 self.get_logger().info('rotate1 выполнен.')
 
-        # 2 Проезд к 0 0
+        # 2 Проезд к x = 0
         if self._stage == 'drive2':
-            err_x = self.irayple_x
-            err_y = self.irayple_y
-            err_dist = math.hypot(err_x, err_y)
-            err_dist_cam = math.hypot(self.irayple_raw_x, self.irayple_raw_y)
-
-            # Если расстояние по сырым показаниям камеры выросло на 15+ единиц:
-            # останавливаемся и заново настраиваем угол.
-            if (
-                self._prev_err_dist_cam is not None
-                and (err_dist_cam - self._prev_err_dist_cam) >= self._cam_dist_increase_threshold
-            ):
-                self.get_logger().warn(
-                    f'Начали удаляться от центра: cam_dist={err_dist_cam:.1f}, '
-                    f'delta={err_dist_cam - self._prev_err_dist_cam:.1f} (threshold={self._cam_dist_increase_threshold:.1f}). '
-                    'Останавливаюсь и заново настраиваю угол.'
-                )
-                self.reset_pi()
-                self.publisher_cmd_vel.publish(Twist())
-                self._stage = 'rotate1'
-                self._prev_err_dist = err_dist
-                self._prev_err_dist_cam = err_dist_cam
-                return
-            self._prev_err_dist = err_dist
-            self._prev_err_dist_cam = err_dist_cam
-
-            if err_dist > self.dist_tolerance:
-                # едем по оси x к центру
-                cmd.angular.z = 0.0
-                self._omega_sp = 0.0
-
-                self.dist_pid.setpoint = 0.0
-                # Инверсия знака: по текущей кинематике платформы положительный err_x
-                # должен давать движение к центру, а не от него.
-                dv_sp = self.dist_pid.update(-err_x)
+            err_dist = self.irayple_x
+            if abs(err_dist) > self.dist_tolerance:
+                dv_sp = self.dist_pid.update(-err_dist)  # dv/dt
                 self._v_sp += dv_sp * dt
-                self._v_sp = max(-self.max_linear_speed, min(self.max_linear_speed, self._v_sp))
+                self._v_sp = max(
+                    -self.max_linear_speed,
+                    min(self.max_linear_speed, self._v_sp)
+                )
+                self.dist_vel_pid.setpoint = self._v_sp
+                cmd.linear.x = -self.dist_vel_pid.update(self.odom_vx)
+            else:
+                self.reset_pi()
+                self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
+                time.sleep(1.0)
+                self._stage = 'rotate3'
+                self.get_logger().info('drive2 выполнен.')
+
+        # 3 угол для y
+        if self._stage == 'rotate3':
+            # к 0.0град
+            err = shortest_angle_error_deci(0.0, self.irayple_theta)
+            if abs(err) > angle_tol_deci:
+                self.angle_pid.setpoint = 0.0
+                self.angle_pid.update(self.odom_theta)
+                print(err)
+                w = self.angle_pid.update(err)  # dw/dt
+                self._omega_sp += w * dt
+                self._omega_sp = max(
+                    -self.max_ang_speed,
+                    min(self.max_ang_speed, self._omega_sp)
+                )
+                self.angle_vel_pid.setpoint = self._omega_sp
+                cmd.angular.z = self.angle_vel_pid.update(self.odom_omega)
+            else:
+                self.reset_pi()
+                self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
+                time.sleep(1.0)
+                self._stage = 'drive4'
+                self.get_logger().info('rotate3 выполнен.')
+
+        # 4 Проезд к центру
+        if self._stage == 'drive4':
+            err_dist = 0 - self.irayple_y
+            if abs(err_dist) > self.dist_tolerance:
+                dv_sp = self.dist_pid.update(-err_dist)  # dv/dt
+                self._v_sp += dv_sp * dt
+                self._v_sp = max(
+                    -self.max_linear_speed,
+                    min(self.max_linear_speed, self._v_sp)
+                )
                 self.dist_vel_pid.setpoint = self._v_sp
                 cmd.linear.x = self.dist_vel_pid.update(self.odom_vx)
             else:
                 self.reset_pi()
                 self.publisher_cmd_vel.publish(Twist())  # остановка до паузы
-                time.sleep(3.0)
-                self._prev_err_dist = None
-                self._prev_err_dist_cam = None
-                self._stage = 'rotate3'
-                self.get_logger().info('drive2 выполнен.')
+                time.sleep(1.0)
+                self._stage = 'rotate5'
+                self.get_logger().info('drive4 выполнен.')
 
-        # 3 финальный поворот по углу
-        if self._stage == 'rotate3':
-            err = shortest_angle_error_deci(1800.0, self.irayple_theta)
+        # 5 финальный поворот по углу
+        if self._stage == 'rotate5':
+            err = shortest_angle_error_deci(0.0, self.irayple_theta)
             if abs(err) > angle_tol_deci:
-                self.angle_pid.setpoint = 1800.0
-                w = self.angle_pid.update(-err)  # dw/dt
+                self.angle_pid.setpoint = 0.0
+                self.angle_pid.update(self.odom_theta)
+                print(err)
+                w = self.angle_pid.update(err)  # dw/dt
                 self._omega_sp += w * dt
-                self._omega_sp = max(-self.max_ang_speed, min(self.max_ang_speed, self._omega_sp))
+                self._omega_sp = max(
+                    -self.max_ang_speed,
+                    min(self.max_ang_speed, self._omega_sp)
+                )
                 self.angle_vel_pid.setpoint = self._omega_sp
                 cmd.angular.z = self.angle_vel_pid.update(self.odom_omega)
             else:
                 self.reset_pi()
                 self._stage = 'wait_updates'
-                self.get_logger().info('rotate3 выполнен.')
+                self.get_logger().info('rotate5 выполнен.')
 
         # Ждём, пока придут свежая одометрия и данные с камеры
         if self._stage == 'wait_updates':
@@ -393,9 +425,6 @@ class IraypleCenter(Node):
                 self.done = True
                 self._stage = 'done'
                 self.get_logger().info('Центровка выполнена.')
-                self._publish_centration_flag(False)
-                self._stop_centering_session()
-                return
 
         self.publisher_cmd_vel.publish(cmd)
 

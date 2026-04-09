@@ -30,10 +30,16 @@ class IraypleQrPosePub(Node):
         self.declare_parameter("frame_id", "map")        
         self.declare_parameter("irayple_scale", 0.0001)  # мм -> м
         self.declare_parameter("information_scale_deg", 0.1)  # 0.1 град -> 1 град
+        self.declare_parameter("publish_initialpose", False)
+        self.declare_parameter("initialpose_min_period_s", 1.0)
 
         self.irayple_scale = float(self.get_parameter("irayple_scale").value)
         self.info_scale_deg = float(self.get_parameter("information_scale_deg").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
+        self.publish_initialpose = bool(self.get_parameter("publish_initialpose").value)
+        self.initialpose_min_period_s = float(
+            self.get_parameter("initialpose_min_period_s").value
+        )
 
         self._pub_raw = self.create_publisher(
             PoseWithCovarianceStamped,
@@ -52,12 +58,10 @@ class IraypleQrPosePub(Node):
             30
         )
 
-        self._timer = self.create_timer(0.5, self._timer_callback)
-
         self._last_stamp = 0.0
         self._last_msg = None
         self._markers = self._load_markers()
-        self._timer_flag = False
+        self._last_initialpose_pub_time = 0.0
         
     def _load_markers(self):
         markers = {}
@@ -126,12 +130,13 @@ class IraypleQrPosePub(Node):
         out_raw = self._get_raw_pose(msg)
         if out_raw is not None:
             self._pub_raw.publish(out_raw)
-            if self._timer_flag:
+            now_s = time.monotonic()
+            if (
+                self.publish_initialpose and
+                (now_s - self._last_initialpose_pub_time) >= self.initialpose_min_period_s
+            ):
                 self._pub_init.publish(out_raw)
-                self._timer_flag = False
-
-    def _timer_callback(self):
-        self._timer_flag = True
+                self._last_initialpose_pub_time = now_s
 
 def main(args=None):
     rclpy.init(args=args)
