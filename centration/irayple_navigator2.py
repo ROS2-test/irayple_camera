@@ -215,7 +215,7 @@ class IraypleCenter(Node):
         self._stage = 'ready'
 
         # коорды к которым ехать
-        self._end_angle = 905.0
+        self._end_angle = 1805.0
         self._target_x = 0.0
         self._target_y = 0.0
 
@@ -365,27 +365,38 @@ class IraypleCenter(Node):
                 if (
                     self._target_angle in [900.0, 2700.0, 0.0, 1800.0, 3600.0]
                 ):
-                    if (self._target_angle - 900.0 == 900.0):
-                        err_dist = self.irayple_y + self._target_y
+                    if (self._target_angle == 1800.0):
                         # вперед/назад ехать
                         koef = -1.0
+                        err_dist = self.irayple_y + self._target_y - koef * 0.350
+                        if self.irayple_x < 0:
+                            self.koef_angle = 1.0
+                        else:
+                            self.koef_angle = -1.0
                     elif (
-                        (self._target_angle - 900.0 == 2700.0) or
-                        (self._target_angle - 900.0 == -900.0)
+                        (self._target_angle == 0.0) or
+                        (self._target_angle == 3600.0)
                     ):
-                        err_dist = self.irayple_y + self._target_y
                         koef = 1.0
-                    elif (self._target_angle - 900.0 == 0.0):
-                        err_dist = self.irayple_x + self._target_x
-                        koef = 1.0
-                    elif (self._target_angle - 900.0 == 1800.0):
-                        err_dist = self.irayple_x + self._target_x
+                        err_dist = self.irayple_y + self._target_y - koef * 0.350
+                        if self.irayple_x < 0:
+                            self.koef_angle = -1.0
+                        else:
+                            self.koef_angle = 1.0
+                    elif (self._target_angle == 2700.0):
                         koef = -1.0
-                    print(err_dist)
-                # наиболее действенный метод
-                # else:
-                #     err_dist = self.irayple_x
-                #     koef = 1.0
+                        err_dist = self.irayple_x + self._target_x - koef * 0.350
+                        if self.irayple_y < 0:
+                            self.koef_angle = -1.0
+                        else:
+                            self.koef_angle = 1.0
+                    elif (self._target_angle == 900.0):
+                        koef = 1.0
+                        err_dist = self.irayple_x + self._target_x - koef * 0.350
+                        if self.irayple_y < 0:
+                            self.koef_angle = 1.0
+                        else:
+                            self.koef_angle = -1.0
                 print(err_dist)
                 if abs(err_dist) > self.dist_tolerance:
                     dv_sp = self.dist_pid.update(err_dist)  # dv/dt
@@ -409,9 +420,9 @@ class IraypleCenter(Node):
             # 3 центруем ось перпендикулярную (поворот)
             if self._stage == 'rotate3':
                 err = shortest_angle_error_deci(
-                    self._target_angle - 450.0, self.irayple_theta
+                    self._target_angle + self.koef_angle * 330.0, self.irayple_theta
                 )
-
+                print(err)
                 if abs(err) > angle_tol_deci:
                     self.angle_pid.setpoint = 0.0
                     self.angle_pid.update(self.odom_theta)
@@ -437,22 +448,19 @@ class IraypleCenter(Node):
                 if (
                     self._target_angle in [900.0, 2700.0, 0.0, 1800.0, 3600.0]
                 ):
-                    if (self._target_angle - 900.0 == 900.0):
+                    if (self._target_angle == 1800.0):
                         err_dist = self.irayple_x + self._target_x
                         # вперед/назад ехать
-                        koef = 1.0
+
                     elif (
-                        (self._target_angle - 900.0 == 2700.0) or
-                        (self._target_angle - 900.0 == -900.0)
+                        (self._target_angle == 0.0) or
+                        (self._target_angle == 3600.0)
                     ):
                         err_dist = self.irayple_x + self._target_x
-                        koef = -1.0
-                    elif (self._target_angle - 900.0 == 0.0):
+                    elif (self._target_angle == 2700.0):
                         err_dist = self.irayple_y + self._target_y
-                        koef = 1.0
-                    elif (self._target_angle - 900.0 == 1800.0):
+                    elif (self._target_angle == 900.0):
                         err_dist = self.irayple_y + self._target_y
-                        koef = -1.0
                     print(err_dist)
                 # наиболее действенный метод
                 # else:
@@ -467,9 +475,9 @@ class IraypleCenter(Node):
                         min(self.max_linear_speed, self._v_sp)
                     )
                     self.dist_vel_pid.setpoint = self._v_sp
-                    cmd.linear.x = koef * self.dist_vel_pid.update(
+                    cmd.linear.x = - abs(self.dist_vel_pid.update(
                         self.odom_vx
-                    )
+                    ))
                 else:
                     self.reset_pi()
                     # остановка до паузы
@@ -546,7 +554,7 @@ class IraypleCenter(Node):
                     time.sleep(1.0)
                     self._stage = 'rotate7'
                     self.get_logger().info('drive6 выполнен.')
-    
+
             # 7 финальный поворот по углу
             if self._stage == 'rotate7':
                 err = shortest_angle_error_deci(
