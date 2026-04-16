@@ -68,6 +68,12 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_navigator2
 )
+install(PROGRAMS
+    slam/irayple_slam.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME irayple_slam
+)
+
 
 install(DIRECTORY launch
     DESTINATION share/${PROJECT_NAME}

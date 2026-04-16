@@ -16,5 +16,14 @@ def generate_launch_description():
             package='irayple',
             executable='irayple_pose_pub',
             name='irayple_pose_pub',
+            parameters=[
+                {'publish_initialpose': True},
+            ],
+        ),
+        # центровка
+        Node(
+            package='irayple',
+            executable='irayple_navigator2',
+            name='irayple_navigator2',
         ),
     ])

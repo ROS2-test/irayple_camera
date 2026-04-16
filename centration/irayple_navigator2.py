@@ -2,15 +2,17 @@
 """Нода для центровки робота по QR-коду."""
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionServer, GoalResponse, CancelResponse
 import time
 import math
-from std_msgs.msg import Bool
+from threading import Event
 from tf_transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
 from irayple.msg import Irayple
+from nav2_msgs.action import Spin
 
 
 def normalize_angle(angle):
@@ -125,7 +127,9 @@ class IraypleCenter(Node):
         self.angle_tolerance = 2.0  # град
         self.rate = 40
         self.irayple_scale = 0.001  # мм -> метры
-        self.information_scale = 0.1
+
+        self.disttol = 40
+        self.angletol = 30
 
         # контур положения
         self.angle_pid = PID(
@@ -177,6 +181,8 @@ class IraypleCenter(Node):
         self._last_timer_time = time.time()
         # флаг для старта центровки извне
         self._centering_active = False
+        self._action_done_event = Event()
+        self._action_success = False
 
         self.subscription_irayple = self.create_subscription(
             Irayple,
@@ -194,7 +200,7 @@ class IraypleCenter(Node):
 
         self.publisher_cmd_vel = self.create_publisher(
             Twist,
-            '/cmd_vel',
+            '/centr_cmd_vel',
             10
         )
         self.publisher_irayple_is_read = self.create_publisher(
@@ -203,12 +209,14 @@ class IraypleCenter(Node):
             10
         )
 
-        # флаг для старта центровки извне
-        self._centration_flag_pub = self.create_publisher(
-            Bool, '/centration_flag', 10
-        )
-        self.create_subscription(
-            Bool, '/centration_flag', self._on_flag, 10
+        # сервер экшена центровки
+        self._center_action_server = ActionServer(
+            self,
+            Spin,
+            'irayple_center_action',
+            execute_callback=self._execute_center_action,
+            goal_callback=self._goal_callback,
+            cancel_callback=self._cancel_callback,
         )
 
         # rotate1 -> drive2 -> rotate3 -> drive3 -> wait_updates -> done
@@ -268,10 +276,48 @@ class IraypleCenter(Node):
                 f'Центр: dist={d:.4f} м, угол={math.degrees(a):.1f}'
             )
 
-    def _on_flag(self, msg: Bool):
-        if not msg.data:
-            return
-        self._centering_active = msg.data
+    def _goal_callback(self, _goal_request):
+        if self._centering_active:
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
+
+    def _cancel_callback(self, _goal_handle):
+        return CancelResponse.ACCEPT
+
+    def _execute_center_action(self, goal_handle):
+        """Выполнение экшена центровки."""
+        def _make_result(started_time: float):
+            """Создание результата экшена."""
+            result = Spin.Result()
+            elapsed = time.time() - started_time
+            result.total_elapsed_time.sec = int(elapsed)
+            result.total_elapsed_time.nanosec = int(
+                (elapsed - int(elapsed)) * 1e9
+            )
+            return result
+
+        # Используем target_yaw из Spin.Goal как входной end_angle (в 0.1 град)
+        self._end_angle = math.degrees(goal_handle.request.target_yaw) * 10.0
+        self._stage = 'ready'
+        self._action_success = False
+        self._action_done_event.clear()
+        self._centering_active = True
+
+        started = time.time()
+        while rclpy.ok() and not self._action_done_event.is_set():
+            if goal_handle.is_cancel_requested:
+                self._centering_active = False
+                self.publisher_cmd_vel.publish(Twist())
+                goal_handle.canceled()
+                return _make_result(started)
+            time.sleep(0.05)
+
+        result = _make_result(started)
+        if self._action_success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
 
     def timer_callback(self):
         """Колбек для таймера."""
@@ -306,9 +352,8 @@ class IraypleCenter(Node):
                 self.publisher_cmd_vel.publish(cmd)
                 return
 
-            # для последнего доворота
+            # для последнего доворота используем _end_angle
             # рассчитаем target angle, если угол не круглый
-            # надо юзать либо это, либо элсы с 900.0 -> 0 ...
             if self._end_angle not in [0.0, 900.0, 1800.0, 2700.0, 3600.0]:
                 err1 = shortest_angle_error_deci(0.0, self._end_angle)
                 err2 = shortest_angle_error_deci(900.0, self._end_angle)
@@ -368,7 +413,9 @@ class IraypleCenter(Node):
                     if (self._target_angle == 1800.0):
                         # вперед/назад ехать
                         koef = -1.0
-                        err_dist = self.irayple_y + self._target_y - koef * 0.350
+                        err_dist = (
+                            self.irayple_y + self._target_y - koef * 0.350
+                        )
                         if self.irayple_x < 0:
                             self.koef_angle = 1.0
                         else:
@@ -378,21 +425,27 @@ class IraypleCenter(Node):
                         (self._target_angle == 3600.0)
                     ):
                         koef = 1.0
-                        err_dist = self.irayple_y + self._target_y - koef * 0.350
+                        err_dist = (
+                            self.irayple_y + self._target_y - koef * 0.350
+                        )
                         if self.irayple_x < 0:
                             self.koef_angle = -1.0
                         else:
                             self.koef_angle = 1.0
                     elif (self._target_angle == 2700.0):
                         koef = -1.0
-                        err_dist = self.irayple_x + self._target_x - koef * 0.350
+                        err_dist = (
+                            self.irayple_x + self._target_x - koef * 0.350
+                        )
                         if self.irayple_y < 0:
                             self.koef_angle = -1.0
                         else:
                             self.koef_angle = 1.0
                     elif (self._target_angle == 900.0):
                         koef = 1.0
-                        err_dist = self.irayple_x + self._target_x - koef * 0.350
+                        err_dist = (
+                            self.irayple_x + self._target_x - koef * 0.350
+                        )
                         if self.irayple_y < 0:
                             self.koef_angle = 1.0
                         else:
@@ -420,7 +473,8 @@ class IraypleCenter(Node):
             # 3 центруем ось перпендикулярную (поворот)
             if self._stage == 'rotate3':
                 err = shortest_angle_error_deci(
-                    self._target_angle + self.koef_angle * 330.0, self.irayple_theta
+                    self._target_angle + self.koef_angle * 330.0,
+                    self.irayple_theta
                 )
                 print(err)
                 if abs(err) > angle_tol_deci:
@@ -586,20 +640,17 @@ class IraypleCenter(Node):
                 cmd = Twist()  # стоп, пока ждём
                 if self.odom_received and self.get_data:
 
-                    atol = self.angle_tolerance / self.information_scale
-                    # мм -> 0.1 мм
-                    disttol = (self.dist_tolerance / self.irayple_scale) * 10
-
                     if (
-                        abs(self.odom_theta - self._target_angle) < atol
-                        and abs(self.irayple_x) < disttol
-                        and abs(self.irayple_y) < disttol
+                        abs(abs(shortest_angle_error_deci(
+                            self._end_angle, self.irayple_theta
+                        ))) < self.angletol
+                        and abs(self.irayple_x) < self.disttol
+                        and abs(self.irayple_y) < self.disttol
                     ):
                         self.get_logger().info('Центровка выполнена.')
+                        self._action_success = True
                         self._centering_active = False
-                        self._centration_flag_pub.publish(
-                            Bool(data=self._centering_active)
-                        )
+                        self._action_done_event.set()
                         self._stage = 'ready'
                     else:
                         self.get_logger().info('Центровка не выполнена.')
@@ -607,7 +658,9 @@ class IraypleCenter(Node):
                         # начнется с этапа поворота до угла подъезда к центру
 
                         # для отладки, после закоментить
+                        self._action_success = False
                         self._centering_active = False
+                        self._action_done_event.set()
                         self._stage = 'ready'
 
             self.publisher_cmd_vel.publish(cmd)
@@ -617,12 +670,16 @@ def main(args=None):
     """Мейн."""
     rclpy.init(args=args)
     node = IraypleCenter()
+    # запускаем второй поток, чтобы не блокировать основной
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         try:
+            executor.shutdown()
             node.destroy_node()
             rclpy.shutdown()
         except Exception:
