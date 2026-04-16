@@ -1,6 +1,32 @@
-Скрипт для парсинга qr-кодов с пола
+Пакет для работы с камерой irayple
 
 Предварительно установим камеру как сервер
+
+```sh
+src/irayple_camera/ (package: irayple)
+├─ centration/
+│  ├─ irayple_center.py
+│  ├─ irayple_navigator2.py
+│  └─ test/
+│     └─ файлы, заготовки, полезные для будущих кодов
+├─ irayple/
+│  ├─ __init__.py
+│  └─ parser.py
+├─ launch/
+│  └─ irayple_launch.py
+├─ msg/
+│  └─ Irayple.msg
+├─ pose/
+│  ├─ irayple_qr_pose_pub.py
+│  └─ markers_config.txt
+├─ slam/
+│  └─ irayple_slam.py
+├─ simple_script/
+│  └─ tcp_test.py
+├─ CMakeLists.txt
+├─ package.xml
+└─ README.md
+```
 
 <details>
 <summary>
@@ -163,21 +189,44 @@
 </details>
 
 
-Упрощенный скрипт с камерой лежит в папке tcp_test.py
+Упрощенный скрипт с проверкой камеры лежит в папке tcp_test.py
 он запускается не как нода.
 
-
-Скрипт ловит данные с камеры по TCP,
+```text
+Скрипт parser.py ловит данные с камеры по TCP,
 декодирует в кортеж из 4х элементов:
 (int, int, int, str)
-
-и отправляет в топик irayple
-работает на ros2 jazzy
+и отправляет в топик /irayple
 тип сообщений хранится в irayple_mgs
+```
+
+```text
+Скрипт irayple_qr_pose_pub.py по данныйм parser.py
+и трансформации map -> base_footprint получает реальную 
+позу робота и публикует в топик /qr_pose
+```
+
+```text
+Скрипт irayple_qr_pose_pub.py по данныйм из файла markers_config.txt
+и трансформации map -> base_footprint получает реальную 
+позу робота в глобальной системе координат и публикует в топик /qr_pose
+```
+
+```text
+Скрипт irayple_slam.py с помощью тфки map -> base_footprint
+и данных из топика /irayple (от parser.py) полностью очищает файл с 
+координатами маркеров markers_config.txt, прописывает шапку,
+далее при виде маркера он 1 раз записывает его данные в файл в нужном формате
+для irayple_qr_pose_pub.py. При повторном попадании маркера на камеру, запись
+не будет произведена.
+```
+
+
 
 Запуск:
 ```sh
 cd /home/user/ros2_ws
 source install/setup.bash
-ros2 run irayple irayple_parser
+ros2 launch irayple irayple_launch.py 
 ```
+
