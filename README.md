@@ -13,7 +13,8 @@ src/irayple_camera/ (package: irayple)
 │  ├─ __init__.py
 │  └─ parser.py
 ├─ launch/
-│  └─ irayple_launch.py
+│  ├─ irayple_launch.py    
+│  └─ irayple_slam.py   
 ├─ msg/
 │  └─ Irayple.msg
 ├─ pose/
@@ -253,5 +254,9 @@ ros2 launch irayple irayple_launch.py
 ```sh
 cd /home/user/ros2_ws
 source install/setup.bash
-ros2 launch irayple slam.py 
+ros2 launch irayple irayple_slam.py
 ```
+
+ в `irayple_launch.py` две камеры (`/irayplelower`, `/iraypleupper`) и два экшена центровки (`irayple_center_action`, `irayple_center_action_upper`); `irayple_navigator2` публикует в `/cmd_vel` и вызывается из VDA5050 через `tb3_adapter`.
+
+**Аргументы:** при `ros2 launch` параметры задаются в launch-файле; при `ros2 run` CLI-флаги передаются после `--`, например `ros2 run irayple irayple_parser -- --host 192.168.0.14 --topic /irayplelower`.

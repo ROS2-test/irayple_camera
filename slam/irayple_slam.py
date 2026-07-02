@@ -4,10 +4,13 @@ import math
 import os
 
 import rclpy
+import argparse
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from tf2_ros import Buffer, TransformListener, TransformException
 from irayple.msg import Irayple
+
+IRAYPLE_TOPIC = '/irayple'
 
 
 def angle(angl):
@@ -22,7 +25,7 @@ def angle(angl):
 class IraypleSlam(Node):
     """При отрисовке создает файл с координатами маркеров."""
 
-    def __init__(self):
+    def __init__(self, irayple_topic=IRAYPLE_TOPIC):
         """Инит."""
         super().__init__('irayple_slam')
 
@@ -31,7 +34,7 @@ class IraypleSlam(Node):
         self.path = os.path.join(package_share, 'pose', 'markers_config.txt')
 
         # фреймы для нахождения трансформации мап -> бейс футпринт
-        self.declare_parameter('irayple_topic', '/irayple')
+        self.declare_parameter('irayple_topic', IRAYPLE_TOPIC)
         self.map_frame = self.declare_parameter('map_frame', 'map').value
         self.base_link_frame = self.declare_parameter(
             'base_frame', 'base_footprint'
@@ -129,8 +132,18 @@ class IraypleSlam(Node):
 
 def main(args=None):
     """Мейн."""
+    import sys
+    kwargs = {}
+    if '--irayple_topic' in sys.argv:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--irayple_topic', default=IRAYPLE_TOPIC)
+        cli = parser.parse_args()
+        kwargs = {
+            'irayple_topic': cli.irayple_topic,
+        }
+
     rclpy.init(args=args)
-    node = IraypleSlam()
+    node = IraypleSlam(**kwargs)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):

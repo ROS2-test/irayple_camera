@@ -5,6 +5,7 @@ import time
 import os
 
 import rclpy
+import argparse
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -14,6 +15,7 @@ from nav_msgs.msg import Odometry
 
 _ODOM_TOPIC = '/odom'
 MAX_VEL = 0.5
+IRAYPLE_TOPIC = '/irayple'
 
 
 def _quat_from_yaw(yaw: float):
@@ -26,14 +28,14 @@ def _quat_from_yaw(yaw: float):
 class IraypleQrPosePub(Node):
     """Публикует позу по QR-кодам."""
 
-    def __init__(self):
+    def __init__(self, irayple_topic=IRAYPLE_TOPIC):
         """Инит."""
         super().__init__('irayple_qr_pose_pub')
 
         package_share = get_package_share_directory('irayple')
         self.path = os.path.join(package_share, 'pose', 'markers_config.txt')
 
-        self.declare_parameter('irayple_topic', '/irayple')
+        self.declare_parameter('irayple_topic', IRAYPLE_TOPIC)
         self.declare_parameter('qr_pose_topic', '/qr_pose')
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('irayple_scale', 0.0001)  # мм -> м
@@ -168,8 +170,17 @@ class IraypleQrPosePub(Node):
 
 def main(args=None):
     """Мейн."""
+    import sys
+    kwargs = {}
+    if '--irayple_topic' in sys.argv:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--irayple_topic', default=IRAYPLE_TOPIC)
+        cli = parser.parse_args()
+        kwargs = {
+            'irayple_topic': cli.irayple_topic,
+        }
     rclpy.init(args=args)
-    node = IraypleQrPosePub()
+    node = IraypleQrPosePub(**kwargs)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):

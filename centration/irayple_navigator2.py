@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 import time
 import math
+import argparse
 from threading import Event
 from tf_transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist
@@ -14,6 +15,12 @@ from std_msgs.msg import String
 from irayple.msg import Irayple
 from nav2_msgs.action import Spin
 
+
+ODOM_TOPIC = '/odom'
+IRAYLE_TOPIC = 'irayple'
+CENTER_CMD_VEL_TOPIC = '/cmd_vel'
+
+IRAYPLE_CENTER_ACTION = 'irayple_center_action'
 
 def normalize_angle(angle):
     """Приводит угол от -пи до пи."""
@@ -117,9 +124,23 @@ class PID:
 class IraypleCenter(Node):
     """Нода для приезда к 0,0,0."""
 
-    def __init__(self):
+    def __init__(self, parser_topic=None, action_name=None):
         """Инициализация."""
-        super().__init__('irayple_center')
+        topic_for_name = parser_topic or IRAYLE_TOPIC
+        safety_postfix = topic_for_name.replace('/', '_').replace('-', '_')
+        super().__init__(f'irayple_center_{safety_postfix}')
+        self.declare_parameter('parse_topic', IRAYLE_TOPIC)
+        self.declare_parameter('action_name', IRAYPLE_CENTER_ACTION)
+        self.parser_topic = (
+            parser_topic
+            if parser_topic is not None
+            else str(self.get_parameter('parse_topic').value)
+        )
+        self.action_name = (
+            action_name
+            if action_name is not None
+            else str(self.get_parameter('action_name').value)
+        )
         self.max_ang_speed = 0.3
         self.max_linear_speed = 0.01  # м/с
         self.max_linear_accel = 0.05  # м/с^2
@@ -186,21 +207,21 @@ class IraypleCenter(Node):
 
         self.subscription_irayple = self.create_subscription(
             Irayple,
-            '/irayple',
+            self.parser_topic,
             self.irayple_callback,
             10
         )
 
         self.subscription_odom = self.create_subscription(
             Odometry,
-            '/odom',
+            ODOM_TOPIC,
             self.odom_callback,
             10
         )
 
         self.publisher_cmd_vel = self.create_publisher(
             Twist,
-            '/centr_cmd_vel',
+            CENTER_CMD_VEL_TOPIC,
             10
         )
         self.publisher_irayple_is_read = self.create_publisher(
@@ -213,7 +234,7 @@ class IraypleCenter(Node):
         self._center_action_server = ActionServer(
             self,
             Spin,
-            'irayple_center_action',
+            self.action_name,
             execute_callback=self._execute_center_action,
             goal_callback=self._goal_callback,
             cancel_callback=self._cancel_callback,
@@ -668,8 +689,20 @@ class IraypleCenter(Node):
 
 def main(args=None):
     """Мейн."""
+    import sys
+
     rclpy.init(args=args)
-    node = IraypleCenter()
+    kwargs = {}
+    if '--parse_topic' in sys.argv or '--action_name' in sys.argv:
+        ap = argparse.ArgumentParser()
+        ap.add_argument('--parse_topic', default=IRAYLE_TOPIC)
+        ap.add_argument('--action_name', default=IRAYPLE_CENTER_ACTION)
+        cli, _ = ap.parse_known_args()
+        kwargs = {
+            'parser_topic': cli.parse_topic,
+            'action_name': cli.action_name,
+        }
+    node = IraypleCenter(**kwargs)
     # запускаем второй поток, чтобы не блокировать основной
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
