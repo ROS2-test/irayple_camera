@@ -9,8 +9,8 @@ import rclpy
 from rclpy.node import Node
 import irayple.msg
 
-DEFAULT_HOST, DEFAULT_PORT = '192.168.49.14', 3000
-LOCAL_IP = '192.168.49.31'
+DEFAULT_HOST, DEFAULT_PORT = '192.168.0.14', 3000
+LOCAL_IP = '192.168.0.200'
 TOPIC = 'irayple'
 
 
