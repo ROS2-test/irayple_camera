@@ -16,7 +16,7 @@ from irayple.msg import Irayple
 from nav2_msgs.action import Spin
 
 
-ODOM_TOPIC = '/odom'
+ODOM_TOPIC = '/wheel_odom'
 IRAYLE_TOPIC = 'irayple'
 CENTER_CMD_VEL_TOPIC = '/cmd_vel'
 

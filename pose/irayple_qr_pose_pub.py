@@ -7,13 +7,13 @@ import os
 import rclpy
 import argparse
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
+from irayple.markers_config import markers_config_path
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from irayple.msg import Irayple
 from nav_msgs.msg import Odometry
 
 
-_ODOM_TOPIC = '/odom'
+_ODOM_TOPIC = '/wheel_odom'
 MAX_VEL = 0.5
 IRAYPLE_TOPIC = '/irayple'
 
@@ -32,8 +32,8 @@ class IraypleQrPosePub(Node):
         """Инит."""
         super().__init__('irayple_qr_pose_pub')
 
-        package_share = get_package_share_directory('irayple')
-        self.path = os.path.join(package_share, 'pose', 'markers_config.txt')
+        self.path = markers_config_path()
+        self.get_logger().info(f'Load from {self.path}')
 
         self.declare_parameter('irayple_topic', IRAYPLE_TOPIC)
         self.declare_parameter('qr_pose_topic', '/qr_pose')

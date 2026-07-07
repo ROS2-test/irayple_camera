@@ -187,7 +187,7 @@ class IraypleCenter(Node):
 
         self.subscription_odom = self.create_subscription(
             Odometry,
-            '/odom',
+            '/wheel_odom',
             self.odom_callback,
             10
         )

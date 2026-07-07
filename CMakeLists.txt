@@ -75,8 +75,10 @@ install(PROGRAMS
 )
 
 
-install(DIRECTORY launch
-    DESTINATION share/${PROJECT_NAME}
+install(PROGRAMS
+    launch/irayple_launch.py
+    launch/irayple_slam.launch.py
+    DESTINATION share/${PROJECT_NAME}/launch
 )
 install(FILES pose/markers_config.txt
     DESTINATION share/${PROJECT_NAME}/pose
