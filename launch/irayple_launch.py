@@ -36,7 +36,7 @@ def generate_launch_description():
             name='irayple_pose_pub',
             parameters=[
                 {'irayple_topic': '/irayplelower'},
-                {'publish_initialpose': True},
+                {'publish_initialpose': False},
             ],
         ),
         # центровка нижней камерой

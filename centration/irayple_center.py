@@ -8,7 +8,7 @@ from std_msgs.msg import Bool
 from irayple.geometry_utils import euler_from_quaternion
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from std_msgs.msg import Bool
 
 from irayple.msg import Irayple
 
@@ -197,11 +197,6 @@ class IraypleCenter(Node):
             '/cmd_vel',
             10
         )
-        self.publisher_irayple_is_read = self.create_publisher(
-            String,
-            '/irayple_is_read',
-            10
-        )
 
         # флаг для старта центровки извне
         self._centration_flag_pub = self.create_publisher(
@@ -288,11 +283,7 @@ class IraypleCenter(Node):
                 (now - self._last_irayple_time) <= self._irayple_timeout_s
             )
 
-            # поднимаем флаг если данные с камеры полуены
-            if self.get_data:
-                self.publisher_irayple_is_read.publish(String(data='True'))
-            else:
-                self.publisher_irayple_is_read.publish(String(data='False'))
+            if not self.get_data:
                 self.publisher_cmd_vel.publish(Twist())
                 return
 

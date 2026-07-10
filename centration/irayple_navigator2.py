@@ -10,7 +10,6 @@ from threading import Event
 from irayple.geometry_utils import euler_from_quaternion
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
 
 from irayple.msg import Irayple
 from nav2_msgs.action import Spin
@@ -18,7 +17,7 @@ from nav2_msgs.action import Spin
 
 ODOM_TOPIC = '/wheel_odom'
 IRAYLE_TOPIC = 'irayple'
-CENTER_CMD_VEL_TOPIC = '/cmd_vel'
+CENTER_CMD_VEL_TOPIC = '/centr_cmd_vel'
 
 IRAYPLE_CENTER_ACTION = 'irayple_center_action'
 
@@ -145,7 +144,7 @@ class IraypleCenter(Node):
         self.max_linear_speed = 0.01  # м/с
         self.max_linear_accel = 0.05  # м/с^2
         self.dist_tolerance = 0.005  # м
-        self.angle_tolerance = 2.0  # град
+        self.angle_tolerance = 0.2  # град
         self.rate = 40
         self.irayple_scale = 0.001  # мм -> метры
 
@@ -222,11 +221,6 @@ class IraypleCenter(Node):
         self.publisher_cmd_vel = self.create_publisher(
             Twist,
             CENTER_CMD_VEL_TOPIC,
-            10
-        )
-        self.publisher_irayple_is_read = self.create_publisher(
-            String,
-            '/irayple_is_read',
             10
         )
 
@@ -322,7 +316,13 @@ class IraypleCenter(Node):
         self._stage = 'ready'
         self._action_success = False
         self._action_done_event.clear()
+        self.calculated = False
+        self.get_data = False
+        self.reset_pi()
         self._centering_active = True
+        self.get_logger().info(
+            f'Старт центровки, target_yaw={goal_handle.request.target_yaw:.3f} rad'
+        )
 
         started = time.time()
         while rclpy.ok() and not self._action_done_event.is_set():
@@ -355,11 +355,7 @@ class IraypleCenter(Node):
                 (now - self._last_irayple_time) <= self._irayple_timeout_s
             )
 
-            # поднимаем флаг если данные с камеры полуены
-            if self.get_data:
-                self.publisher_irayple_is_read.publish(String(data='True'))
-            else:
-                self.publisher_irayple_is_read.publish(String(data='False'))
+            if not self.get_data:
                 self.publisher_cmd_vel.publish(Twist())
                 return
 
