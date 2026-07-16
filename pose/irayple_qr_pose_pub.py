@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
 """Публикует позу по QR-кодам. Не прокидывает инитпоз при большой скорости."""
+import argparse
 import math
 import time
-import os
 
 import rclpy
-import argparse
-from rclpy.node import Node
-from irayple.markers_config import markers_config_path
+import tf_transformations as tft
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from irayple.markers_config import markers_config_path
 from irayple.msg import Irayple
 from nav_msgs.msg import Odometry
-
+from rclpy.node import Node
 
 _ODOM_TOPIC = '/wheel_odom'
 MAX_VEL = 0.5
 IRAYPLE_TOPIC = '/irayple'
-
-
-def _quat_from_yaw(yaw: float):
-    """Кватернион из угла yaw. Точнее чем стандартные ф-ции."""
-    yaw_rad = yaw * math.pi / 180.0
-    half = 0.5 * yaw_rad
-    return (0.0, 0.0, math.sin(half), math.cos(half))
 
 
 class IraypleQrPosePub(Node):
@@ -97,15 +89,14 @@ class IraypleQrPosePub(Node):
                     if not line or line.startswith('#'):
                         continue
                     parts = line.split()
-                    if len(parts) < 5:
+                    if len(parts) < 4:
                         self.get_logger().warn(f'Skip invalid marker: {line}')
                         continue
                     marker_id = parts[0].strip()
                     x = float(parts[1])
                     y = float(parts[2])
                     yaw_rad = float(parts[3])
-                    flip_180 = int(parts[4])
-                    markers[marker_id] = (x, y, yaw_rad, flip_180)
+                    markers[marker_id] = (x, y, yaw_rad)
         except Exception as e:
             self.get_logger().error(f'Failed to read config: {e}')
             return {}
@@ -117,24 +108,34 @@ class IraypleQrPosePub(Node):
         if byte_key not in self._markers:
             self.get_logger().warn(f'{byte_key} not in markers config.')
             return
-        # raw camera pose (x, y)
-        if self._markers[byte_key][3] == 1:
-            x_m = - msg.y * self.irayple_scale + self._markers[byte_key][0]
-            y_m = msg.x * self.irayple_scale + self._markers[byte_key][1]
-        else:
-            x_m = msg.y * self.irayple_scale + self._markers[byte_key][0]
-            y_m = - msg.x * self.irayple_scale + self._markers[byte_key][1]
 
-        # information: 1-3599
-        marker_yaw = self._markers[byte_key][2] * 180.0 / math.pi
-        yaw_deg = -float(msg.information) * self.info_scale_deg + marker_yaw
-        qx, qy, qz, qw = _quat_from_yaw(yaw_deg)
+        marker_x, marker_y, marker_yaw_rad = self._markers[byte_key]
+
+        # information: 1-3599 (угол поворота камеры относительно маркера)
+        local_x = msg.y * self.irayple_scale
+        local_y = msg.x * self.irayple_scale
+        rel_yaw_rad = (
+            -float(msg.information) * self.info_scale_deg * math.pi / 180.0
+        )
+        pose = (
+            tft.translation_matrix((marker_x, marker_y, 0.0))
+            @ tft.quaternion_matrix(
+                tft.quaternion_from_euler(0.0, 0.0, marker_yaw_rad)
+            )
+            @ tft.translation_matrix((local_x, local_y, 0.0))
+            @ tft.quaternion_matrix(
+                tft.quaternion_from_euler(0.0, 0.0, rel_yaw_rad)
+            )
+        )
+        x_m = float(pose[0, 3])
+        y_m = float(pose[1, 3])
+        qx, qy, qz, qw = tft.quaternion_from_matrix(pose)
 
         out_raw = PoseWithCovarianceStamped()
         out_raw.header.stamp = stamp
         out_raw.header.frame_id = self.frame_id
-        out_raw.pose.pose.position.x = float(x_m)
-        out_raw.pose.pose.position.y = float(y_m)
+        out_raw.pose.pose.position.x = x_m
+        out_raw.pose.pose.position.y = y_m
         out_raw.pose.pose.position.z = 0.0
         out_raw.pose.pose.orientation.x = float(qx)
         out_raw.pose.pose.orientation.y = float(qy)
