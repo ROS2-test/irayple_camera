@@ -112,8 +112,9 @@ class IraypleQrPosePub(Node):
         marker_x, marker_y, marker_yaw_rad = self._markers[byte_key]
 
         # information: 1-3599 (угол поворота камеры относительно маркера)
-        local_x = msg.y * self.irayple_scale
-        local_y = msg.x * self.irayple_scale
+        # Смещение в осях камеры/робота: x вперёд, y влево (как в navigator).
+        local_x = msg.x * self.irayple_scale
+        local_y = msg.y * self.irayple_scale
         rel_yaw_rad = (
             -float(msg.information) * self.info_scale_deg * math.pi / 180.0
         )

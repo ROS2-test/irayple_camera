@@ -8,6 +8,7 @@ import time
 import rclpy
 from rclpy.node import Node
 import irayple.msg
+from irayple.geometry_utils import camera_raw_to_robot
 
 DEFAULT_HOST, DEFAULT_PORT = '192.168.0.14', 3000
 LOCAL_IP = '192.168.0.200'
@@ -107,12 +108,13 @@ class Parser(Node):
                 pass
 
     def publish_data(self, x, y, information, byte):
-        """Публикует данные."""
+        """Публикует данные; information скорректирован на монтаж камеры 45° CCW."""
         try:
+            _, _, info_r = camera_raw_to_robot(x, y, information)
             msg = irayple.msg.Irayple()
             msg.x = int(x)
             msg.y = int(y)
-            msg.information = int(information)
+            msg.information = int(info_r)
             # Убеждаемся что byte это строка
             msg.byte = str(byte) if byte is not None else ''
             # self.get_logger().info(f"Published: {msg}")
