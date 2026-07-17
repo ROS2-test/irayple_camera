@@ -21,7 +21,9 @@ def markers_config_path():
     if not ws:
         ws = os.path.expanduser('~/ros2_ws')
 
-    src_path = os.path.join(ws, 'src', 'irayple', 'pose', 'markers_config.txt')
+    src_path = os.path.join(
+        ws, 'src', 'irayple_camera', 'pose', 'markers_config.txt',
+    )
     if os.path.isdir(os.path.dirname(src_path)):
         return src_path
 

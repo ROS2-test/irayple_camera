@@ -109,8 +109,8 @@ class IraypleSlam(Node):
         self._slam_callback()
         marker_id = msg.byte
         if marker_id not in self._markers.keys():
-            marker_x = self._x - msg.y * self.irayple_scale
-            marker_y = self._y + msg.x * self.irayple_scale
+            marker_x = self._x - msg.x * self.irayple_scale
+            marker_y = self._y - msg.y * self.irayple_scale
             marker_yaw = self._yaw + (
                 float(msg.information) * self.info_scale_deg * math.pi / 180.0
             )
