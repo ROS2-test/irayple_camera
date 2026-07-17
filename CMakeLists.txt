@@ -39,24 +39,9 @@ install(PROGRAMS
     RENAME irayple_parser
 )
 install(PROGRAMS
-    centration/test/irayple_navigator.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME irayple_navigator
-)
-install(PROGRAMS
     centration/irayple_center.py
     DESTINATION lib/${PROJECT_NAME}
     RENAME irayple_center
-)
-install(PROGRAMS
-    centration/test/irayple_center_short.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME irayple_center_short
-)
-install(PROGRAMS
-    centration/test/irayple_center_simple.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME irayple_center_simple
 )
 install(PROGRAMS
     pose/irayple_qr_pose_pub.py

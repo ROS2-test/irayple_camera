@@ -1,11 +1,11 @@
-"""Общий путь к markers_config.txt в src workspace."""
+"""Common path to markers_config.txt in src workspace."""
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 
 def markers_config_path():
-    """src/irayple/pose/markers_config.txt — один файл для SLAM и локализации."""
+    """One file for SLAM and localization."""
     ws = os.environ.get('ROS2_WS')
     if not ws:
         share = get_package_share_directory('irayple')

@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Нода для центровки робота по QR-коду."""
+"""Node for centering robot by QR-code."""
+import math
+import time
+
+from geometry_msgs.msg import Twist
+
+from irayple.geometry_utils import euler_from_quaternion
+from irayple.msg import Irayple
+
+from nav_msgs.msg import Odometry
+
 import rclpy
 from rclpy.node import Node
-import time
-import math
-from std_msgs.msg import Bool
-from irayple.geometry_utils import euler_from_quaternion
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
 
-from irayple.msg import Irayple
+from std_msgs.msg import Bool
 
 
 def normalize_angle(angle):
-    """Приводит угол от -пи до пи."""
+    """Convert angle from -pi to pi."""
     while angle > math.pi:
         angle -= 2 * math.pi
     while angle < -math.pi:
@@ -30,13 +33,13 @@ def normalize_angle(angle):
 
 
 def quaternion_to_yaw(q):
-    """кватернион -> угол."""
+    """Convert quaternion to yaw."""
     _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
     return yaw
 
 
 def shortest_angle_error_deci(target_deci: float, current_deci: float):
-    """Кратчайшая ошибка угла в 0.1 град."""
+    """Shortest angle error in 0.1 deg."""
     # Датчик дает угол в формате 1..3599 (0.1 градуса на шаг).
     # Нормализуем во внутренний круг 0..3599,
     # чтобы корректно учитывать переброс.
@@ -46,7 +49,7 @@ def shortest_angle_error_deci(target_deci: float, current_deci: float):
 
 
 class PID:
-    """Класс ПИДа."""
+    """PID class."""
 
     def __init__(
         self,
@@ -57,7 +60,7 @@ class PID:
         output_limit=1.0,
         max_integral_error=None
     ):
-        """Инициализация ПИДа."""
+        """Init of PID."""
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -70,13 +73,13 @@ class PID:
         self.last_time = time.time()
 
     def reset(self):
-        """Сброс ПИДа."""
+        """Reset PID."""
         self.last_error = 0
         self.integral = 0
         self.last_time = time.time()
 
     def update(self, current_value):
-        """Обновление ПИДа."""
+        """Update PID."""
         now = time.time()
         dt = now - self.last_time
         if dt <= 0:
@@ -113,10 +116,10 @@ class PID:
 
 
 class IraypleCenter(Node):
-    """Нода для приезда к 0,0,0."""
+    """Node for arrive to 0,0,0."""
 
     def __init__(self):
-        """Инициализация."""
+        """Init."""
         super().__init__('irayple_center')
         self.max_ang_speed = 0.3
         self.max_linear_speed = 0.01  # м/с
@@ -219,16 +222,16 @@ class IraypleCenter(Node):
         self.declare_parameter('global_frame', 'map')
 
     def calculate_angle(self):
-        """Угол к центру в глобальной системе координат."""
+        """Angle to center in global coordinate system."""
         angle_in_robot = math.atan2(self.irayple_y, self.irayple_x)
         return normalize_angle(self.odom_theta + angle_in_robot)
 
     def calculate_dist(self):
-        """Расстояние до центра по камере (м)."""
+        """Distance to center by camera (m)."""
         return math.sqrt(self.irayple_x**2 + self.irayple_y**2)
 
     def reset_pi(self):
-        """Сброс состояния регуляторов."""
+        """Reset state of regulators."""
         self.angle_pid.reset()
         self.dist_pid.reset()
         self.angle_vel_pid.reset()
@@ -238,7 +241,7 @@ class IraypleCenter(Node):
         self._last_timer_time = time.time()
 
     def odom_callback(self, msg):
-        """Колбек для чтения odom."""
+        """Odom callback."""
         self.odom_received = True
         self.odom_x = msg.pose.pose.position.x
         self.odom_y = msg.pose.pose.position.y
@@ -247,7 +250,7 @@ class IraypleCenter(Node):
         self.odom_omega = msg.twist.twist.angular.z
 
     def irayple_callback(self, msg):
-        """Колбек чтения irayple."""
+        """Irayple callback."""
         self.get_data = True
         self._last_irayple_time = time.time()
         self.irayple_x = msg.x * self.irayple_scale
@@ -269,7 +272,7 @@ class IraypleCenter(Node):
         self._centering_active = msg.data
 
     def timer_callback(self):
-        """Колбек для таймера."""
+        """Timer callback."""
         if self._centering_active:
             now = time.time()
             dt = now - self._last_timer_time
@@ -322,7 +325,7 @@ class IraypleCenter(Node):
             if self._stage == 'ready' and self._centering_active:
                 # self._target_angle = self.calculate_angle()
                 self._stage = 'rotate1'
-                self.get_logger().info('Запуск центровки.')
+                self.get_logger().info('Start centering.')
 
             cmd = Twist()
             angle_tol_deci = self.angle_tolerance * 10.0 / 2  # град -> 0.1град
@@ -358,7 +361,7 @@ class IraypleCenter(Node):
                     self.publisher_cmd_vel.publish(Twist())
                     time.sleep(1.0)
                     self._stage = 'drive2'
-                    self.get_logger().info('rotate1 выполнен.')
+                    self.get_logger().info('rotate1 completed.')
 
             # 2 Проезд к x = 0
             if self._stage == 'drive2':
@@ -404,7 +407,7 @@ class IraypleCenter(Node):
                     self.publisher_cmd_vel.publish(Twist())
                     time.sleep(1.0)
                     self._stage = 'rotate3'
-                    self.get_logger().info('drive2 выполнен.')
+                    self.get_logger().info('drive2 completed.')
 
             # 3 угол для y
             if self._stage == 'rotate3':
@@ -437,7 +440,7 @@ class IraypleCenter(Node):
                     self.publisher_cmd_vel.publish(Twist())
                     time.sleep(1.0)
                     self._stage = 'drive4'
-                    self.get_logger().info('rotate3 выполнен.')
+                    self.get_logger().info('rotate3 completed.')
 
             # 4 Проезд к центру
             if self._stage == 'drive4':
@@ -480,7 +483,7 @@ class IraypleCenter(Node):
                     self.publisher_cmd_vel.publish(Twist())
                     time.sleep(1.0)
                     self._stage = 'rotate5'
-                    self.get_logger().info('drive4 выполнен.')
+                    self.get_logger().info('drive4 completed.')
 
             # 5 финальный поворот по углу
             if self._stage == 'rotate5':
@@ -503,7 +506,7 @@ class IraypleCenter(Node):
                 else:
                     self.reset_pi()
                     self._stage = 'wait_updates'
-                    self.get_logger().info('rotate5 выполнен.')
+                    self.get_logger().info('rotate5 completed.')
 
             # Ждём, пока придут свежая одометрия и данные с камеры
             if self._stage == 'wait_updates':
@@ -519,14 +522,14 @@ class IraypleCenter(Node):
                         and abs(self.irayple_x) < disttol
                         and abs(self.irayple_y) < disttol
                     ):
-                        self.get_logger().info('Центровка выполнена.')
+                        self.get_logger().info('Centering completed.')
                         self._centering_active = False
                         self._centration_flag_pub.publish(
                             Bool(data=self._centering_active)
                         )
                         self._stage = 'ready'
                     else:
-                        self.get_logger().info('Центровка не выполнена.')
+                        self.get_logger().info('Centering not completed.')
                         # тк тут мы не опукаем флаг центровки, то центровка
                         # начнется с этапа поворота до угла подъезда к центру
 
@@ -538,7 +541,7 @@ class IraypleCenter(Node):
 
 
 def main(args=None):
-    """Мейн."""
+    """Func main."""
     rclpy.init(args=args)
     node = IraypleCenter()
     try:

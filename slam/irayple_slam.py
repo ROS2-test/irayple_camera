@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""При отрисовке создает файл с координатами маркеров."""
+"""Create file with coordinates of markers."""
+import argparse
 import math
 import os
 
-import rclpy
-import argparse
-from rclpy.node import Node
 from irayple.markers_config import markers_config_path
-from tf2_ros import Buffer, TransformListener, TransformException
 from irayple.msg import Irayple
+
+import rclpy
+from rclpy.node import Node
+
+from tf2_ros import Buffer
+from tf2_ros import TransformException
+from tf2_ros import TransformListener
+
 
 IRAYPLE_TOPIC = '/irayple'
 
 
 def angle(angl):
-    """Приводит угол к диапазону [0, 2*pi]."""
+    """Convert angle to range [0, 2*pi]."""
     while angl > 2 * math.pi:
         angl -= 2 * math.pi
     while angl < 0:
@@ -23,10 +28,10 @@ def angle(angl):
 
 
 class IraypleSlam(Node):
-    """При отрисовке создает файл с координатами маркеров."""
+    """Create file with coordinates of markers."""
 
     def __init__(self, irayple_topic=IRAYPLE_TOPIC):
-        """Инит."""
+        """Init."""
         super().__init__('irayple_slam')
 
         self.path = markers_config_path()
@@ -62,12 +67,12 @@ class IraypleSlam(Node):
         self._yaw = 0.0
 
         with open(self.path, 'w', encoding='utf-8') as f:
-            f.write('# byte x y yaw(radians) flip_180 (все через 1 пробел)\n')
+            f.write('# byte x y yaw(radians) (все через 1 пробел)\n')
             f.write('#\n')
-        self.get_logger().info(f'Запись маркеров в {self.path}')
+        self.get_logger().info(f'Write markers to {self.path}')
 
     def _slam_callback(self):
-        """Обновляет TF map->base с учетом цепочки через odom."""
+        """Update TF map->base with odom chain."""
         try:
             tr = self.tf_buffer.lookup_transform(
                 self.map_frame,
@@ -76,7 +81,7 @@ class IraypleSlam(Node):
             )
         except TransformException as ex:
             self.get_logger().warn(
-                f'Нет TF {self.map_frame}->{self.base_link_frame}: {ex}',
+                f'No TF {self.map_frame}->{self.base_link_frame}: {ex}',
                 throttle_duration_sec=5.0,
             )
             return
@@ -88,7 +93,7 @@ class IraypleSlam(Node):
         )
 
     def _write_markers(self, marker_id, x, y, yaw):
-        """Записывает координаты маркеров в файл."""
+        """Write coordinates of markers to file."""
         with open(self.path, 'a', encoding='utf-8') as f:
             f.write(str(marker_id) + ' ')
             f.write(str(x) + ' ')
@@ -96,21 +101,16 @@ class IraypleSlam(Node):
             f.write(str(yaw) + ' ')
             f.write(str(0) + '\n')
         self.get_logger().info(
-            f'Маркер {marker_id} записан: x={x:.3f} y={y:.3f} yaw={yaw:.3f}'
+            f'Marker {marker_id} written: x={x:.3f} y={y:.3f} yaw={yaw:.3f}'
         )
 
     def _cb(self, msg: Irayple):
-        """Колбек для чтения маркеров."""
+        """Read markers callback."""
         self._slam_callback()
         marker_id = msg.byte
         if marker_id not in self._markers.keys():
-            if self.flip_180 == 1:
-                marker_x = self._x + msg.y * self.irayple_scale
-                marker_y = self._y - msg.x * self.irayple_scale
-            else:
-                marker_x = self._x - msg.y * self.irayple_scale
-                marker_y = self._y + msg.x * self.irayple_scale
-
+            marker_x = self._x - msg.y * self.irayple_scale
+            marker_y = self._y + msg.x * self.irayple_scale
             marker_yaw = self._yaw + (
                 float(msg.information) * self.info_scale_deg * math.pi / 180.0
             )
@@ -118,12 +118,12 @@ class IraypleSlam(Node):
 
             self._write_markers(marker_id, marker_x, marker_y, marker_yaw)
             self._markers[marker_id] = [
-                marker_x, marker_y, marker_yaw, self.flip_180
+                marker_x, marker_y, marker_yaw
             ]
 
 
 def main(args=None):
-    """Мейн."""
+    """Func main."""
     import sys
     kwargs = {}
     if '--irayple_topic' in sys.argv:

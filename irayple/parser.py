@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-# Парсер камеры irayple. Данные: (x;y;v3;v4) или несколько подряд в одном пакете.
+"""Parser for irayple camera. Data: (x;y;v3;v4)."""
 
-import re
 import argparse
+import re
 import socket
 import time
-import rclpy
-from rclpy.node import Node
+
 import irayple.msg
 from irayple.geometry_utils import camera_raw_to_robot
+
+import rclpy
+from rclpy.node import Node
 
 DEFAULT_HOST, DEFAULT_PORT = '192.168.0.14', 3000
 LOCAL_IP = '192.168.0.200'
@@ -16,7 +18,10 @@ TOPIC = 'irayple'
 
 
 class Parser(Node):
+    """Parser for irayple camera."""
+
     def __init__(self, host=None, port=None, localip=None, topic=None):
+        """Init."""
         topic_for_name = topic if topic is not None else TOPIC
         safe_postfix = topic_for_name.replace('/', '_').replace('-', '_')
         super().__init__(f'irayple_parser_{safe_postfix}')
@@ -24,7 +29,10 @@ class Parser(Node):
         self.declare_parameter('port', DEFAULT_PORT)
         self.declare_parameter('localip', LOCAL_IP)
         self.declare_parameter('topic', TOPIC)
-        self.host = host if host is not None else self.get_parameter('host').value
+        self.host = (
+            host if host is not None
+            else self.get_parameter('host').value
+        )
         self.port = (
             port if port is not None
             else int(self.get_parameter('port').value)
@@ -69,7 +77,7 @@ class Parser(Node):
         self.socket.connect((self.host, self.port))
 
     def _parse_packet(self, data):
-        """возвращает список (x, y, information, byte)."""
+        """Return list [x, y, information, byte]."""
         try:
             text = data.decode('utf-8', errors='ignore')
         except Exception:
@@ -80,6 +88,7 @@ class Parser(Node):
         return out
 
     def timer_callback(self):
+        """Timer callback."""
         try:
             if not self._check_connection():
                 return
@@ -94,7 +103,7 @@ class Parser(Node):
         except (ConnectionRefusedError, OSError):
             t = time.time()
             if t - self._last_conn_warn >= 5.0:
-                self.get_logger().warn(f'Camera connection refused')
+                self.get_logger().warn('Camera connection refused')
                 self._last_conn_warn = time.time()
             try:
                 self._connect()
@@ -108,7 +117,7 @@ class Parser(Node):
                 pass
 
     def publish_data(self, x, y, information, byte):
-        """Публикует данные; information скорректирован на монтаж камеры 45° CCW."""
+        """Publish data; information corrected for 45 deg."""
         try:
             _, _, info_r = camera_raw_to_robot(x, y, information)
             msg = irayple.msg.Irayple()
@@ -124,7 +133,7 @@ class Parser(Node):
 
 
 def main(args=None):
-    """main."""
+    """Func main."""
     import sys
 
     rclpy.init(args=args)

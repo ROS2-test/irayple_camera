@@ -1,44 +1,50 @@
 #!/usr/bin/env python3
-"""Публикует позу по QR-кодам. Не прокидывает инитпоз при большой скорости."""
+"""Publish qr pose to /qr_pose."""
 import argparse
 import math
 import time
 
-import rclpy
-import tf_transformations as tft
 from geometry_msgs.msg import PoseWithCovarianceStamped
+
 from irayple.markers_config import markers_config_path
 from irayple.msg import Irayple
+
 from nav_msgs.msg import Odometry
+
+import rclpy
 from rclpy.node import Node
+
+import tf_transformations as tft
+
+_IRAYPLE_SCALE = 0.0001  # мм -> м
+_INFORMATION_SCALE_DEG = 0.1  # 0.1 -> 1 град
 
 _ODOM_TOPIC = '/wheel_odom'
 MAX_VEL = 0.5
 IRAYPLE_TOPIC = '/irayple'
+_QR_POSE_TOPIC = '/qr_pose'
+_INITIALPOSE_TOPIC = '/initialpose'
 
 
 class IraypleQrPosePub(Node):
-    """Публикует позу по QR-кодам."""
+    """Publish qr pose to /qr_pose."""
 
     def __init__(self, irayple_topic=IRAYPLE_TOPIC):
-        """Инит."""
+        """Init."""
         super().__init__('irayple_qr_pose_pub')
 
         self.path = markers_config_path()
         self.get_logger().info(f'Load from {self.path}')
 
-        self.declare_parameter('irayple_topic', IRAYPLE_TOPIC)
-        self.declare_parameter('qr_pose_topic', '/qr_pose')
+        self.declare_parameter('irayple_topic', irayple_topic)
+        self.declare_parameter('qr_pose_topic', _QR_POSE_TOPIC)
         self.declare_parameter('frame_id', 'map')
-        self.declare_parameter('irayple_scale', 0.0001)  # мм -> м
-        self.declare_parameter('information_scale_deg', 0.1)  # 0.1 -> 1 град
         self.declare_parameter('publish_initialpose', False)
         self.declare_parameter('initialpose_min_period_s', 1.0)
 
-        self.irayple_scale = float(self.get_parameter('irayple_scale').value)
-        self.info_scale_deg = float(
-            self.get_parameter('information_scale_deg').value
-        )
+        self.irayple_scale = _IRAYPLE_SCALE
+        self.info_scale_deg = _INFORMATION_SCALE_DEG
+
         self.frame_id = str(self.get_parameter('frame_id').value)
         self.publish_initialpose = bool(
             self.get_parameter('publish_initialpose').value
@@ -49,12 +55,12 @@ class IraypleQrPosePub(Node):
 
         self._pub_raw = self.create_publisher(
             PoseWithCovarianceStamped,
-            self.get_parameter('qr_pose_topic').value,
+            _QR_POSE_TOPIC,
             30
         )
         self._pub_init = self.create_publisher(
             PoseWithCovarianceStamped,
-            '/initialpose',
+            _INITIALPOSE_TOPIC,
             10
         )
         self.create_subscription(
@@ -171,7 +177,7 @@ class IraypleQrPosePub(Node):
 
 
 def main(args=None):
-    """Мейн."""
+    """Func main."""
     import sys
     kwargs = {}
     if '--irayple_topic' in sys.argv:
